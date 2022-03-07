@@ -9,7 +9,7 @@ import Control.Applicative
 import Control.Monad
 import Control.Monad.Fix
 import Data.Char (isAlpha, isAlphaNum, isDigit, isSpace)
-import Data.List (unfoldr)
+import Data.List (find, unfoldr)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -23,8 +23,22 @@ data Expr
   | Minus Expr Expr
   | Mul Expr Expr
   | Div Expr Expr
+  | Mod Expr Expr
+  | UnaryPlus Expr
+  | UnaryMinus Expr
+  | Not Expr
+  | Lt Expr Expr
+  | Le Expr Expr
+  | Gt Expr Expr
+  | Ge Expr Expr
+  | Eq Expr Expr
+  | Neq Expr Expr
+  | And Expr Expr
+  | Or Expr Expr
   | Tuple [TupleExpr]
-  | VarRef [Text]
+  | List [Expr]
+  | Var Text
+  | Member Expr Text
   deriving (Show)
 
 data TupleExpr
@@ -45,6 +59,7 @@ tokenize = concatMap tokenizeLine . zip [1 ..] . T.lines
         recognizeOne (colno, t) =
           case T.uncons t of
             Nothing -> Nothing
+            Just ('#', _) -> Nothing
             Just (h, r)
               | isSpace h -> recognizeOne (1 + colno, r)
               | isAlpha h ->
@@ -56,12 +71,12 @@ tokenize = concatMap tokenizeLine . zip [1 ..] . T.lines
                       let len = T.length t - T.length remaining
                        in Just (PositionedText lineno colno (T.take len t), (colno + len, remaining))
                     Left _ -> error "unexpected error while tokenizing"
+              | Just op <- find (`T.isPrefixOf` t) multiCharPunct ->
+                  Just (PositionedText lineno colno op, (colno + T.length op, T.drop (T.length op) t))
               | otherwise -> Just (PositionedText lineno colno (T.singleton h), (colno + 1, r))
 
-readNumber :: PositionedText -> Maybe Double
-readNumber (PositionedText _ _ t) = case TR.double t of
-  Right (n, "") -> Just n
-  _ -> Nothing
+multiCharPunct :: [Text]
+multiCharPunct = ["&&", "||", "==", "!=", "<=", ">="]
 
 reservedWords :: [Text]
 reservedWords = ["true", "false", "assert"]
@@ -77,31 +92,120 @@ between bra ket p = bra *> p <* ket
 sepEndBy :: E.Prod r e t a -> E.Prod r e t b -> E.Grammar r (E.Prod r e t [a])
 sepEndBy p sep = mfix (\rule -> E.rule $ (:) <$> p <*> ((sep *> rule) <|> pure []) <|> pure [])
 
-sepBy1 :: E.Prod r e t a -> E.Prod r e t b -> E.Grammar r (E.Prod r e t [a])
-sepBy1 p sep = mfix (\rule -> E.rule $ (:) <$> p <*> ((sep *> rule) <|> pure []))
-
 lit :: Text -> E.Prod r Text PositionedText ()
-lit t = () <$ E.satisfy (\(PositionedText _ _ tok) -> tok == t) E.<?> (T.snoc (T.cons '"' t) '"')
+lit t = void $ E.satisfy (\(PositionedText _ _ tok) -> tok == t) E.<?> T.snoc (T.cons '"' t) '"'
 
 expr :: E.Grammar r (E.Prod r Text PositionedText Expr)
 expr = mdo
+  val <- E.rule orExpr
+
+  orExpr <-
+    E.rule $
+      let bin = do
+            t1 <- orExpr
+            _ <- lit "||"
+            t2 <- andExpr
+            pure (Or t1 t2)
+       in bin <|> andExpr
+
+  andExpr <-
+    E.rule $
+      let bin = do
+            t1 <- andExpr
+            _ <- lit "&&"
+            t2 <- eqExpr
+            pure (And t1 t2)
+       in bin <|> eqExpr
+
+  eqExpr <-
+    E.rule $
+      let bin = do
+            t1 <- eqExpr
+            op <- Eq <$ lit "==" <|> Neq <$ lit "!="
+            t2 <- compExpr
+            pure (op t1 t2)
+       in bin <|> compExpr
+
+  compExpr <-
+    E.rule $
+      let bin = do
+            t1 <- compExpr
+            op <- Lt <$ lit "<" <|> Le <$ lit "<=" <|> Gt <$ lit ">" <|> Ge <$ lit ">="
+            t2 <- addExpr
+            pure (op t1 t2)
+       in bin <|> addExpr
+
+  addExpr <-
+    E.rule $
+      let bin = do
+            t1 <- addExpr
+            op <- Plus <$ lit "+" <|> Minus <$ lit "-"
+            t2 <- mulExpr
+            pure (op t1 t2)
+       in bin <|> mulExpr
+
+  mulExpr <-
+    E.rule $
+      let bin = do
+            t1 <- mulExpr
+            op <- Mul <$ lit "*" <|> Div <$ lit "/" <|> Mod <$ lit "%"
+            t2 <- unaryExpr
+            pure (op t1 t2)
+       in bin <|> unaryExpr
+
+  unaryExpr <-
+    E.rule $
+      let un = do
+            op <- UnaryMinus <$ lit "-" <|> UnaryPlus <$ lit "+" <|> Not <$ lit "!"
+            t <- unaryExpr
+            pure (op t)
+       in un <|> atom
+
+  atom <- E.rule $ bool <|> number <|> memberExpr
+
   bool <- E.rule $ (Boolean True <$ lit "true") <|> (Boolean False <$ lit "false")
-  number <- E.rule $ Number <$> E.terminal readNumber E.<?> "number literal"
-  addExpr <- E.rule $ (do t1 <- addExpr; op <- Plus <$ lit "+" <|> Minus <$ lit "-"; t2 <- mulExpr; pure (op t1 t2)) <|> mulExpr
-  mulExpr <- E.rule $ (do t1 <- mulExpr; op <- Mul <$ lit "*" <|> Div <$ lit "/"; t2 <- atom; pure (op t1 t2)) <|> atom
-  varRefs <- (E.terminal identifier `sepBy1` lit ".")
-  var <- E.rule $ VarRef <$> varRefs
-  atom <- E.rule $ var <|> bool <|> number <|> between (lit "(") (lit ")") val
+
+  number <-
+    E.rule $
+      let readNumber :: PositionedText -> Maybe Double
+          readNumber (PositionedText _ _ t) = case TR.double t of
+            Right (n, "") -> Just n
+            _ -> Nothing
+       in Number <$> E.terminal readNumber E.<?> "number literal"
+
+  memberExpr <-
+    E.rule $
+      let bin = do
+            obj <- memberExpr
+            _ <- lit "."
+            mem <- E.terminal identifier E.<?> "identifier"
+            pure (Member obj mem)
+       in bin <|> var <|> surroundExpr
+
+  surroundExpr <- E.rule $ parenthesized <|> tuple <|> list
+
+  parenthesized <- E.rule $ between (lit "(") (lit ")") val
+
+  var <- E.rule $ Var <$> E.terminal identifier E.<?> "identifier"
+
+  tuple <- E.rule $ Tuple <$> between (lit "{") (lit "}") tupleContents
+
+  tupleContents <- tupleItem `sepEndBy` lit ","
+
+  tupleItem <- E.rule $ tupleRow <|> tupleAssertion
+
   tupleRow <- E.rule $ do
     k <- E.terminal identifier E.<?> "identifier"
     _ <- lit "="
     v <- val
     pure (Row k v)
-  tupleAssertion <- E.rule $ Assertion <$> (lit "assert" *> between (lit "(") (lit ")") val)
-  tupleContents <- tupleItem `sepEndBy` lit ","
-  tupleItem <- E.rule $ tupleRow <|> tupleAssertion
-  tuple <- E.rule $ Tuple <$> between (lit "{") (lit "}") tupleContents
-  val <- E.rule $ addExpr <|> tuple
+
+  tupleAssertion <- E.rule $ Assertion <$> (lit "assert" *> parenthesized)
+
+  listContents <- val `sepEndBy` lit ","
+
+  list <- E.rule $ List <$> between (lit "[") (lit "]") listContents
+
   pure val
 
 parser :: E.Parser Text [PositionedText] Expr
@@ -139,9 +243,12 @@ examples :: [Text]
 examples =
   [ "true",
     "1.234",
-    "1 + 2 * 3 + 4",
-    "1+ ",
+    "1+2+3+4+5",
+    "1 + 2 * 3 + 4 < 5",
+    "a+b.c.d",
+    "+a+!b.c.d",
     "(",
+    ")",
     "{",
     "{}",
     "{} =",
@@ -151,7 +258,12 @@ examples =
     "{x = true, }",
     "{x = true,\n y = false\n}",
     "{x = true,\n y = false,\n}",
-    "{x = true,\n y = false,,\n}"
+    "{x = true,\n y = x + 1}",
+    "{x = true,\n assert(true), }",
+    "1 + { a = 2, b = a + 3}.b ",
+    "1 + { a = 2, b = a + 3}.b && c",
+    "[]",
+    "[1, true]"
   ]
 
 parseExamples :: IO ()
