@@ -2,6 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE StrictData #-}
 
 module QCL (Expr (..), TupleExpr (..), parseQCL) where
 
@@ -43,8 +44,13 @@ data Expr
   deriving (Show)
 
 data TupleExpr
-  = Row Text Expr
+  = Row Text RowExpr
   | Assertion Expr
+  deriving (Show)
+
+data RowExpr
+  = ValuedRow Expr
+  | NullRow
   deriving (Show)
 
 data PositionedText = PositionedText Int Int Text
@@ -80,7 +86,7 @@ multiCharPunct :: [Text]
 multiCharPunct = ["&&", "||", "==", "!=", "<=", ">="]
 
 reservedWords :: [Text]
-reservedWords = ["true", "false", "assert"]
+reservedWords = ["true", "false", "assert", "null"]
 
 identifier :: PositionedText -> Maybe Text
 identifier (PositionedText _ _ t) = do
@@ -202,8 +208,10 @@ expr = mdo
   tupleRow <- E.rule $ do
     k <- E.terminal identifier E.<?> "identifier"
     _ <- lit "="
-    v <- val
+    v <- tupleRowValue
     pure (Row k v)
+
+  tupleRowValue <- E.rule $ (NullRow <$ lit "null") <|> (ValuedRow <$> val)
 
   tupleAssertion <- E.rule $ Assertion <$> (lit "assert" *> parenthesized)
 
@@ -272,7 +280,8 @@ examples =
     "a{x=1} {y=2}",
     "a.b.c",
     "a.b{x=1}",
-    "a{x=1}.b"
+    "a{x=1}.b",
+    "{ x=1, y=2, z=3 } {z = null}"
   ]
 
 parseExamples :: IO ()
