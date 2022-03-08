@@ -36,6 +36,7 @@ data Expr
   | And Expr Expr
   | Or Expr Expr
   | Tuple [TupleExpr]
+  | TupleUpdate Expr [TupleExpr]
   | List [Expr]
   | Var Text
   | Member Expr Text
@@ -161,7 +162,7 @@ expr = mdo
             pure (op t)
        in un <|> atom
 
-  atom <- E.rule $ bool <|> number <|> memberExpr
+  atom <- E.rule $ bool <|> number <|> memberOrUpdateExpr
 
   bool <- E.rule $ (Boolean True <$ lit "true") <|> (Boolean False <$ lit "false")
 
@@ -173,14 +174,18 @@ expr = mdo
             _ -> Nothing
        in Number <$> E.terminal readNumber E.<?> "number literal"
 
-  memberExpr <-
+  memberOrUpdateExpr <-
     E.rule $
-      let bin = do
-            obj <- memberExpr
+      let member = do
+            obj <- memberOrUpdateExpr
             _ <- lit "."
             mem <- E.terminal identifier E.<?> "identifier"
             pure (Member obj mem)
-       in bin <|> var <|> surroundExpr
+          update = do
+            obj <- memberOrUpdateExpr
+            updates <- between (lit "{") (lit "}") tupleContents
+            pure (TupleUpdate obj updates)
+       in member <|> update <|> var <|> surroundExpr
 
   surroundExpr <- E.rule $ parenthesized <|> tuple <|> list
 
@@ -263,7 +268,11 @@ examples =
     "1 + { a = 2, b = a + 3}.b ",
     "1 + { a = 2, b = a + 3}.b && c",
     "[]",
-    "[1, true]"
+    "[1, true]",
+    "a{x=1} {y=2}",
+    "a.b.c",
+    "a.b{x=1}",
+    "a{x=1}.b"
   ]
 
 parseExamples :: IO ()
