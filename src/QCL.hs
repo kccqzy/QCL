@@ -1,4 +1,5 @@
 {-# LANGUAGE ApplicativeDo #-}
+{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE RecursiveDo #-}
@@ -16,6 +17,9 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Text.Read as TR
 import qualified Text.Earley as E
+
+data Positioned a = Positioned Int Int a
+  deriving (Show, Functor)
 
 data Expr
   = Number Double
@@ -53,8 +57,7 @@ data RowExpr
   | NullRow
   deriving (Show)
 
-data PositionedText = PositionedText Int Int Text
-  deriving (Show)
+type PositionedText = Positioned Text
 
 tokenize :: Text -> [PositionedText]
 tokenize = concatMap tokenizeLine . zip [1 ..] . T.lines
@@ -71,16 +74,16 @@ tokenize = concatMap tokenizeLine . zip [1 ..] . T.lines
               | isSpace h -> recognizeOne (1 + colno, r)
               | isAlpha h ->
                   let (tok, remaining) = T.span isAlphaNum t
-                   in Just (PositionedText lineno colno tok, (colno + T.length tok, remaining))
+                   in Just (Positioned lineno colno tok, (colno + T.length tok, remaining))
               | isDigit h ->
                   case TR.double t of
                     Right (n, remaining) ->
                       let len = T.length t - T.length remaining
-                       in Just (PositionedText lineno colno (T.take len t), (colno + len, remaining))
+                       in Just (Positioned lineno colno (T.take len t), (colno + len, remaining))
                     Left _ -> error "unexpected error while tokenizing"
               | Just op <- find (`T.isPrefixOf` t) multiCharPunct ->
-                  Just (PositionedText lineno colno op, (colno + T.length op, T.drop (T.length op) t))
-              | otherwise -> Just (PositionedText lineno colno (T.singleton h), (colno + 1, r))
+                  Just (Positioned lineno colno op, (colno + T.length op, T.drop (T.length op) t))
+              | otherwise -> Just (Positioned lineno colno (T.singleton h), (colno + 1, r))
 
 multiCharPunct :: [Text]
 multiCharPunct = ["&&", "||", "==", "!=", "<=", ">="]
@@ -89,7 +92,7 @@ reservedWords :: [Text]
 reservedWords = ["true", "false", "assert", "null"]
 
 identifier :: PositionedText -> Maybe Text
-identifier (PositionedText _ _ t) = do
+identifier (Positioned _ _ t) = do
   (h, r) <- T.uncons t
   if isAlpha h && T.all isAlphaNum r && t `notElem` reservedWords then Just t else Nothing
 
@@ -100,7 +103,7 @@ sepEndBy :: E.Prod r e t a -> E.Prod r e t b -> E.Grammar r (E.Prod r e t [a])
 sepEndBy p sep = mfix (\rule -> E.rule $ (:) <$> p <*> ((sep *> rule) <|> pure []) <|> pure [])
 
 lit :: Text -> E.Prod r Text PositionedText ()
-lit t = void $ E.satisfy (\(PositionedText _ _ tok) -> tok == t) E.<?> T.snoc (T.cons '"' t) '"'
+lit t = void $ E.satisfy (\(Positioned _ _ tok) -> tok == t) E.<?> T.snoc (T.cons '"' t) '"'
 
 expr :: E.Grammar r (E.Prod r Text PositionedText Expr)
 expr = mdo
@@ -175,7 +178,7 @@ expr = mdo
   number <-
     E.rule $
       let readNumber :: PositionedText -> Maybe Double
-          readNumber (PositionedText _ _ t) = case TR.double t of
+          readNumber (Positioned _ _ t) = case TR.double t of
             Right (n, "") -> Just n
             _ -> Nothing
        in Number <$> E.terminal readNumber E.<?> "number literal"
@@ -236,8 +239,8 @@ parseQCL t = case E.fullParses parser (tokenize t) of
       printError $ case (expected, unconsumed) of
         ([], []) -> error "internal error: no parse result but no expected/unconsumed"
         (_ : _, []) -> ParseError EOF ("Unexpected EOF. Expecting " <> T.intercalate ", " expected)
-        ([], PositionedText l c t : _) -> ParseError (Loc l c) ("Expecting EOF. Found \"" <> t <> "\"")
-        (_ : _, PositionedText l c t : _) -> ParseError (Loc l c) ("Expecting " <> T.intercalate ", " expected <> ". Found \"" <> t <> "\"")
+        ([], Positioned l c t : _) -> ParseError (Loc l c) ("Expecting EOF. Found \"" <> t <> "\"")
+        (_ : _, Positioned l c t : _) -> ParseError (Loc l c) ("Expecting " <> T.intercalate ", " expected <> ". Found \"" <> t <> "\"")
     (p1 : p2 : _) -> error $ "internal error: ambiguous grammar: found " ++ show p1 ++ " and " ++ show p2
   where
     tl = T.lines t
