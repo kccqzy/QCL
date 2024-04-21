@@ -6,7 +6,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StrictData #-}
 
-module QCL (Positioned (..), Expr (..), TupleExpr (..), RowExpr (..), parseQCL, evalQCL, runExamples) where
+module QCL (Positioned (..), Expr (..), TupleExpr (..), RowExpr (..), evalQCL, runExamples) where
 
 import Control.Applicative
 import Control.Monad
@@ -18,8 +18,9 @@ import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as AesonMap
 import qualified Data.ByteString.Lazy.Char8 as BL
 import Data.Char (isAlpha, isAlphaNum, isDigit, isSpace)
+import Data.Foldable
 import Data.Functor
-import Data.List (find, unfoldr)
+import Data.List (unfoldr)
 import qualified Data.Map.Strict as M
 import Data.Scientific (fromFloatDigits)
 import Data.Text (Text)
@@ -99,7 +100,7 @@ tokenize = concatMap tokenizeLine . zip [1 ..] . T.lines
                     Right (_, remaining) ->
                       let len = T.length t - T.length remaining
                           newcolno = colno + len
-                       in Just (Positioned (lineno, colno) (lineno, newcolno) (T.take len t), (colno, remaining))
+                       in Just (Positioned (lineno, colno) (lineno, newcolno) (T.take len t), (newcolno, remaining))
                     Left _ -> error "unexpected error while tokenizing"
               | Just op <- find (`T.isPrefixOf` t) multiCharPunct ->
                   let newcolno = colno + T.length op in Just (Positioned (lineno, colno) (lineno, newcolno) op, (newcolno, T.drop (T.length op) t))
@@ -292,22 +293,27 @@ parseQCL t = case E.fullParses parser (tokenize t) of
     [] -> Left $
       printError $ case (expected, unconsumed) of
         ([], []) -> error "internal error: no parse result but no expected/unconsumed"
-        (_ : _, []) -> ParseError EOF ("Unexpected EOF. Expecting " <> T.intercalate ", " expected)
-        ([], Positioned b _ tok : _) -> ParseError (Loc b) ("Expecting EOF. Found \"" <> tok <> "\"")
-        (_ : _, Positioned b _ tok : _) -> ParseError (Loc b) ("Expecting " <> T.intercalate ", " expected <> ". Found \"" <> tok <> "\"")
+        (_ : _, []) -> ParseError EOF ("unexpected EOF; expecting " <> T.intercalate ", " expected)
+        ([], Positioned b _ tok : _) -> ParseError (Loc b) ("expecting EOF; found \"" <> tok <> "\"")
+        (_ : _, Positioned b _ tok : _) -> ParseError (Loc b) ("expecting " <> T.intercalate ", " expected <> ", found \"" <> tok <> "\"")
     (p1 : p2 : _) -> error $ "internal error: ambiguous grammar: found " ++ show p1 ++ " and " ++ show p2
   where
     tl = T.lines t
     printError (ParseError pel msg) =
-      "Error: " <> msg <> "\n\n"
-        <> ( case pel of
-               EOF -> mempty
-               Loc (l, c) ->
-                 let column = T.pack (show l) <> " | "
-                     origLine = tl !! (l - 1)
-                     spaces = T.replicate (T.length column + c - 1) " "
-                  in column <> origLine <> "\n" <> spaces <> "^-- here"
-           )
+      "parse error:\n" <> errorContext
+      where
+        errorContext =
+          case pel of
+            EOF -> "    " <> msg <> "\n"
+            Loc (l, c) ->
+              let lineno = T.pack (show l)
+                  linenoSpace = T.replicate (T.length lineno) " "
+                  gutter = " | "
+                  gutterEmpty = linenoSpace <> gutter
+                  gutterLine = lineno <> gutter
+                  origLine = tl !! (l - 1)
+                  spaces = T.replicate (c - 1) " "
+               in gutterEmpty <> "\n" <> gutterLine <> origLine <> "\n" <> gutterEmpty <> spaces <> "^ " <> msg <> "\n"
 
 data Value
   = NumberValue Double
@@ -351,7 +357,7 @@ type Eval = ExceptT EvalError (State EvalEnvironment)
 
 evalNumeric :: PositionedExpr -> Eval Double
 evalNumeric pexpr = do
-  val <- evalQCL pexpr
+  val <- evalExpr pexpr
   case val of
     NumberValue n -> pure n
     BooleanValue True -> pure 1
@@ -370,8 +376,8 @@ evalNumericBoolFunc1 f a = (BooleanValue . f) <$> (evalNumeric a)
 evalNumericBoolFunc2 :: (Double -> Double -> Bool) -> PositionedExpr -> PositionedExpr -> Eval Value
 evalNumericBoolFunc2 f a b = BooleanValue <$> liftA2 f (evalNumeric a) (evalNumeric b)
 
-evalQCL :: PositionedExpr -> Eval Value
-evalQCL pexpr =
+evalExpr :: PositionedExpr -> Eval Value
+evalExpr pexpr =
   case pValue pexpr of
     Number d -> pure (NumberValue d)
     Boolean b -> pure (BooleanValue b)
@@ -392,15 +398,15 @@ evalQCL pexpr =
     And a b -> evalNumericBoolFunc2 (\x y -> (x /= 0) && (y /= 0)) a b
     Or a b -> evalNumericBoolFunc2 (\x y -> (x /= 0) || (y /= 0)) a b
     Not a -> evalNumericBoolFunc1 (== 0) a
-    List pes -> ListValue <$> traverse evalQCL pes
+    List pes -> ListValue <$> traverse evalExpr pes
     Tuple tupleExprs -> evalTupleExprs M.empty tupleExprs
     TupleUpdate origVal updates -> do
-      orig <- evalQCL origVal
+      orig <- evalExpr origVal
       case orig of
         TupleValue t -> evalTupleExprs t (pValue updates)
         _ -> throwE (TypeError origVal ExpectTuple)
     Member tuple label -> do
-      tupleVal <- evalQCL tuple
+      tupleVal <- evalExpr tuple
       case tupleVal of
         TupleValue t -> case M.lookup (pValue label) t of
           Nothing -> throwE (NonExistentLabelError t label)
@@ -417,10 +423,10 @@ lookupVariable p env =
     InsideTuple {eCurrentTuple = cur, eOuterEnvironment = outer} ->
       case (M.lookup (pValue p) cur, lookupVariable p outer) of
         (Nothing, e@(Left _)) -> e
-        (Just _, Left (AmbiguousVariableError p2 _)) -> Left (AmbiguousVariableError p p2)
+        (Just (p1, _), Left (AmbiguousVariableError p2 _)) -> Left (AmbiguousVariableError p1 p2)
         (Just x, Left _) -> pure x
         (Nothing, Right x) -> pure x
-        (Just _, Right (p2, _)) -> Left (AmbiguousVariableError p p2)
+        (Just (p1, _), Right (p2, _)) -> Left (AmbiguousVariableError p1 p2)
 
 evalTupleExprs :: TupleValue -> [PositionedTupleExpr] -> Eval Value
 evalTupleExprs initial updates = do
@@ -436,33 +442,109 @@ evalTupleExpr tp =
   case pValue tp of
     Row label valExpr -> do
       val <- case pValue valExpr of
-        ValuedRow rowValue -> Just <$> evalQCL rowValue
+        ValuedRow rowValue -> Just <$> evalExpr rowValue
         NullRow -> pure Nothing
-      e <- lift get
-      newe <-
-        M.alterF
-          ( \orig -> case (orig, val) of
-              -- It is okay to remove something that doesn't exist.
-              (Nothing, Nothing) -> pure Nothing
-              (Nothing, Just v) -> pure (Just (label, v))
-              (Just _, Nothing) -> pure Nothing
-              (Just (prevLabel, _), Just _) -> throwE (DuplicateLabelError label prevLabel)
-          )
-          (pValue label)
-          (eCurrentTuple e)
-      lift (put e {eCurrentTuple = newe})
+      env <- lift get
+      case env of
+        TopLevel -> error "evalTupleExpr cannot be called"
+        InsideTuple {eCurrentTuple = e, eOuterEnvironment = outer} -> do
+          newe <-
+            M.alterF
+              ( \orig -> case (orig, val) of
+                  (_, Nothing) -> pure Nothing
+                  (Nothing, Just v) -> pure (Just (label, v))
+                  (Just (prevLabel, _), Just _) -> throwE (DuplicateLabelError label prevLabel)
+              )
+              (pValue label)
+              e
+          lift (put InsideTuple {eCurrentTuple = newe, eOuterEnvironment = outer})
     Assertion assertion -> do
-      val <- evalQCL assertion
+      val <- evalExpr assertion
       case val of
         BooleanValue True -> pure ()
         BooleanValue False -> throwE (AssertionFailed assertion)
         _ -> throwE (TypeError assertion ExpectBoolean)
+
+evalQCL :: Text -> Either Text Value
+evalQCL text = do
+  parsed <- parseQCL text
+  case evalState (runExceptT (evalExpr parsed)) TopLevel of
+    Right v -> pure v
+    Left e -> Left (printError e)
+  where
+    textLines = T.lines text
+    printError :: EvalError -> Text
+    printError ee =
+      "error:\n    " <> msg
+      where
+        msg = case ee of
+          TypeError pe detail ->
+            "unexpected type for expression\n" <> explainContext pe ("expecting " <> explainExpectedType detail)
+          DuplicateLabelError l1 l2 ->
+            "duplicate label " <> escapedText l1 <> " in tuple\n" <> explainContext l2 "this definition" <> explainContext l1 "earlier definition"
+          AssertionFailed pe ->
+            "assertion failed\n" <> explainContext pe "evaluates to false"
+          NonExistentLabelError tp l ->
+            "label " <> escapedText l <> " does not exist in tuple\n" <> explainContext l (explainTuple tp)
+          TopLevelVariableError l ->
+            "variable reference " <> escapedText l <> " must be inside a tuple\n" <> explainContext l "top-level variable"
+          NonExistentVariableError l ->
+            "variable reference " <> escapedText l <> " does not exist in this lexical scope\n" <> explainContext l "undefined variable"
+          AmbiguousVariableError l1 l2 ->
+            "variable reference " <> escapedText l1 <> " is ambiguous\n" <> explainContext l1 "possible reference" <> explainContext l2 "another possible reference"
+        escapedText (Positioned {pValue = t}) = T.pack (show t)
+        explainExpectedType detail = case detail of
+          ExpectBoolean -> "boolean"
+          ExpectNumberOrBoolean -> "number or boolean"
+          ExpectTuple -> "tuple"
+        explainTuple tp = case M.toList tp of
+          [] -> "tuple is empty"
+          [(a, _)] -> "tuple has sole label " <> a
+          v ->
+            let shortened5 = map (T.pack . show . fst) (take 5 v)
+                shortened4 = take 4 shortened5
+             in "tuple has labels " <> T.intercalate ", " shortened4 <> (if length shortened5 == 5 then ", ..." else mempty)
+        explainContext :: Positioned a -> Text -> Text
+        explainContext Positioned {pBegin = (bl, bc), pEnd = (el, ec)} explanation =
+          let contextLines = drop (bl - 1) (take el (zip [(1 :: Int) ..] textLines))
+              contextLinesWithColumns =
+                zip
+                  contextLines
+                  ( ( \(lineno, line) ->
+                        ( if lineno == bl then bc else 1,
+                          if lineno == el then ec else T.length line + 1
+                        )
+                    )
+                      <$> contextLines
+                  )
+              gutter = " | "
+              lastLineno = T.pack (show el)
+              gutterEmpty = T.replicate (T.length lastLineno) " " <> gutter
+              makeGutter n =
+                let ns = T.pack (show n)
+                 in T.replicate (T.length lastLineno - T.length ns) " " <> ns <> gutter
+           in gutterEmpty <> "\n"
+                <> foldMap'
+                  ( \((lineno, line), (columnBegin, columnEnd)) ->
+                      makeGutter lineno
+                        <> line
+                        <> "\n"
+                        <> gutterEmpty
+                        <> T.replicate (columnBegin - 1) " "
+                        <> T.replicate (columnEnd - columnBegin) "^"
+                        <> (if lineno == el then " " <> explanation else mempty)
+                        <> "\n"
+                  )
+                  contextLinesWithColumns
 
 examples :: [Text]
 examples =
   [ "true",
     "1.234",
     "1+2+3+4+5",
+    "17.5 / 5.5",
+    "17.5 // 5.5",
+    "17.5 % 5.5",
     "1 + 2 * 3 + 4 < 5",
     "a+b.c.d",
     "+a+!b.c.d",
@@ -479,18 +561,22 @@ examples =
     "{x = true,\n y = false,\n}",
     "{x = true,\n y = x + 1}",
     "{x = true,\n assert(true), }",
+    "{x = 5, assert(x % 2\n==\n0), }",
     "{x = 2,\n x = 1}",
     "1 + { a = 2, b = a + 3}.b ",
     "1 + { a = 2, b = a + 3}.b && c",
+    "1 + { a = 2, b = a + 3}",
     "[]",
     "[1, true]",
     "a{x=1} {y=2}",
     "a.b.c",
     "a.b{x=1}",
     "a{x=1}.b",
+    "{a = {b = {c=1}}, ret = a.b{x=1}}.ret",
+    "{a = {b = {c=1}}, ret = a{x=1}.b}.ret",
     "{ x=1, y=2, z=3 } {z = null}",
     "{ x=1, y=2, z=3 } .x",
-    "{ x=1, y=2, z=3 } .w",
+    "{ x=1, y=2, z=3 }.wwww",
     "{ x=1, y=2, z=y } ",
     "{ x=1, y=2, z={a=1, b=y} } ",
     "{ x=1, y=2, z={a=1, b=a} } ",
@@ -501,14 +587,9 @@ examples =
 runExamples :: IO ()
 runExamples = forM_ examples $ \s -> do
   TIO.putStrLn s
-  case parseQCL s of
-    Right parsed -> do
-      case evalState (runExceptT (evalQCL parsed)) TopLevel of
-        Right value -> do
-          putStr "Eval Success: "
-          BL.putStrLn (Aeson.encode value)
-        Left e -> do
-          putStr "Parse Success: " <> print parsed
-          putStr "Eval error: " <> print e
+  case evalQCL s of
+    Right value -> do
+      putStr "Result: "
+      BL.putStrLn (Aeson.encode value)
     Left e -> TIO.putStrLn e
   putStrLn "========================================"
