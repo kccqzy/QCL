@@ -14,14 +14,19 @@ import Control.Monad.Fix
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.Except
 import Control.Monad.Trans.State.Strict
+import qualified Data.Aeson as Aeson
+import qualified Data.Aeson.KeyMap as AesonMap
+import qualified Data.ByteString.Lazy.Char8 as BL
 import Data.Char (isAlpha, isAlphaNum, isDigit, isSpace)
 import Data.Functor
 import Data.List (find, unfoldr)
 import qualified Data.Map.Strict as M
+import Data.Scientific (fromFloatDigits)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Text.Read as TR
+import Data.Vector (fromList)
 import qualified Text.Earley as E
 
 data Positioned a = Positioned {pBegin :: (Int, Int), pEnd :: (Int, Int), pValue :: a}
@@ -313,6 +318,12 @@ data Value
 
 type TupleValue = M.Map Text (PositionedText, Value)
 
+instance Aeson.ToJSON Value where
+  toJSON (NumberValue n) = Aeson.Number (fromFloatDigits n)
+  toJSON (BooleanValue b) = Aeson.Bool b
+  toJSON (ListValue l) = Aeson.Array (fromList (Aeson.toJSON <$> l))
+  toJSON (TupleValue tv) = Aeson.Object (AesonMap.fromMapText (Aeson.toJSON . snd <$> tv))
+
 data EvalError
   = TypeError PositionedExpr TypeErrorDetail
   | -- | A tuple definition has a duplicate label.
@@ -493,7 +504,9 @@ runExamples = forM_ examples $ \s -> do
   case parseQCL s of
     Right parsed -> do
       case evalState (runExceptT (evalQCL parsed)) TopLevel of
-        Right value -> putStr "Eval Success: " <> print value
+        Right value -> do
+          putStr "Eval Success: "
+          BL.putStrLn (Aeson.encode value)
         Left e -> do
           putStr "Parse Success: " <> print parsed
           putStr "Eval error: " <> print e
