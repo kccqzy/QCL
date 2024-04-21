@@ -547,14 +547,9 @@ examples =
     "17.5 % 5.5",
     "1 + 2 * 3 + 4 < 5",
     "a+b.c.d",
-    "+a+!b.c.d",
-    "(",
-    ")",
-    "{",
     "{}",
     "{} =",
     "{} { }",
-    "{} = { }",
     "{x = true}",
     "{x = true, }",
     "{x = true,\n y = false\n}",
@@ -568,7 +563,7 @@ examples =
     "1 + { a = 2, b = a + 3}",
     "[]",
     "[1, true]",
-    "a{x=1} {y=2}",
+    "a{x=1} {y=+x}",
     "a.b.c",
     "a.b{x=1}",
     "a{x=1}.b",
@@ -586,10 +581,16 @@ examples =
 
 runExamples :: IO ()
 runExamples = forM_ examples $ \s -> do
+  putStrLn "QCL:\n\n```"
   TIO.putStrLn s
+  putStrLn "```"
   case evalQCL s of
     Right value -> do
-      putStr "Result: "
+      putStrLn "\nJSON result:\n\n```"
       BL.putStrLn (Aeson.encode value)
-    Left e -> TIO.putStrLn e
-  putStrLn "========================================"
+      putStrLn "```\n"
+    Left e -> do
+      putStrLn "\nError message:\n```"
+      TIO.putStrLn e
+      putStrLn "```\n"
+  putStrLn "------------\n"
