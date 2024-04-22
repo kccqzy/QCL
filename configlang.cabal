@@ -24,11 +24,6 @@ library
 executable configlang
     main-is:          Main.hs
 
-    -- Modules included in this executable, other than Main.
-    -- other-modules:
-
-    -- LANGUAGE extensions used by modules in this package.
-    -- other-extensions:
     build-depends:
         base ^>=4.19,
         configlang,
@@ -37,4 +32,17 @@ executable configlang
         bytestring ^>= 0.12
 
     hs-source-dirs:   app
+    default-language: Haskell2010
+
+executable configlang-examples
+    main-is:          Main.hs
+
+    build-depends:
+        base ^>=4.19,
+        configlang,
+        aeson ^>= 2.2,
+        text ^>= 2.1,
+        bytestring ^>= 0.12
+
+    hs-source-dirs:   examples
     default-language: Haskell2010
