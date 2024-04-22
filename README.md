@@ -262,6 +262,21 @@ JSON result:
 QCL:
 
 ```
+{private x = true,
+ y = x + 1}
+```
+
+JSON result:
+
+```
+{"y":2}
+```
+
+------------
+
+QCL:
+
+```
 {x = true,
  assert(true), }
 ```
@@ -308,7 +323,7 @@ QCL:
 Error message:
 ```
 error:
-    duplicate label "x" in tuple
+    duplicate field label "x" in tuple
   |
 1 | {x = 2,
   |  ^ this definition
@@ -523,6 +538,20 @@ JSON result:
 QCL:
 
 ```
+{ x=1, y=2, z=3 } {z = 4}
+```
+
+JSON result:
+
+```
+{"x":1,"y":2,"z":4}
+```
+
+------------
+
+QCL:
+
+```
 { x=1, y=2, z=3 } {z = null}
 ```
 
@@ -662,3 +691,44 @@ error:
 
 ```
 
+------------
+
+QCL:
+
+```
+{ final meaningOfLife = 42 } { meaningOfLife = 43 }
+```
+
+Error message:
+```
+error:
+    field marked as final cannot be overridden
+  |
+1 | { final meaningOfLife = 42 } { meaningOfLife = 43 }
+  |                                ^^^^^^^^^^^^^ override here
+  |
+1 | { final meaningOfLife = 42 } { meaningOfLife = 43 }
+  |         ^^^^^^^^^^^^^ defined as final here
+
+```
+
+------------
+
+QCL:
+
+```
+{ final meaningOfLife = 42 } { meaningOfLife = null }
+```
+
+Error message:
+```
+error:
+    field marked as final cannot be overridden
+  |
+1 | { final meaningOfLife = 42 } { meaningOfLife = null }
+  |                                ^^^^^^^^^^^^^ override here
+  |
+1 | { final meaningOfLife = 42 } { meaningOfLife = null }
+  |         ^^^^^^^^^^^^^ defined as final here
+
+```

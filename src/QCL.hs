@@ -68,8 +68,11 @@ data Expr
   | Member PositionedExpr PositionedText
   deriving (Show)
 
+data RowAttribute = RowRegular | RowFinal | RowPrivate
+  deriving (Show)
+
 data TupleExpr
-  = Row PositionedText PositionedRowExpr
+  = Row RowAttribute PositionedText PositionedRowExpr
   | Assertion PositionedExpr
   deriving (Show)
 
@@ -111,7 +114,7 @@ multiCharPunct :: [Text]
 multiCharPunct = ["&&", "||", "==", "!=", "<=", ">=", "//"]
 
 reservedWords :: [Text]
-reservedWords = ["true", "false", "assert", "null"]
+reservedWords = ["true", "false", "assert", "null", "private", "final"]
 
 identifier :: PositionedText -> Maybe PositionedText
 identifier pt = do
@@ -119,7 +122,7 @@ identifier pt = do
   (h, r) <- T.uncons t
   if isAlpha h && T.all isAlphaNum r && t `notElem` reservedWords then Just pt else Nothing
 
-between :: Applicative m => m (Positioned bra) -> m (Positioned ket) -> m b -> m (Positioned b)
+between :: (Applicative m) => m (Positioned bra) -> m (Positioned ket) -> m b -> m (Positioned b)
 between bra ket ps = do
   b <- bra
   vs <- ps
@@ -258,11 +261,12 @@ expr = mdo
 
   tupleItem <- E.rule $ tupleRow <|> tupleAssertion
 
-  tupleRow <- E.rule $ do
+  tupleRow :: E.Prod r Text PositionedText PositionedTupleExpr <- E.rule $ do
+    attr <- pure RowRegular <|> (RowFinal <$ lit "final") <|> (RowPrivate <$ lit "private")
     k <- E.terminal identifier E.<?> "identifier"
     _ <- lit "="
     v <- tupleRowValue
-    pure (fromPosition2 k v (Row k v))
+    pure (fromPosition2 k v (Row attr k v))
 
   let valuedRow pe = ValuedRow pe <$ pe
   tupleRowValue <- E.rule $ (NullRow <$$ lit "null") <|> (valuedRow <$> val)
@@ -322,13 +326,24 @@ data Value
   | ListValue [Value]
   deriving (Show)
 
-type TupleValue = M.Map Text (PositionedText, Value)
+type TupleValue = M.Map Text TupleValueRow
+
+data TupleValueRow
+  = TupleValueRow
+  { tprDefitionLoc :: PositionedText,
+    tprValue :: Value,
+    tprFinality :: TupleValueRowFinality
+  }
+  deriving (Show)
+
+newtype TupleValueRowFinality = TupleValueRowFinality Bool
+  deriving (Show)
 
 instance Aeson.ToJSON Value where
   toJSON (NumberValue n) = Aeson.Number (fromFloatDigits n)
   toJSON (BooleanValue b) = Aeson.Bool b
   toJSON (ListValue l) = Aeson.Array (fromList (Aeson.toJSON <$> l))
-  toJSON (TupleValue tv) = Aeson.Object (AesonMap.fromMapText (Aeson.toJSON . snd <$> tv))
+  toJSON (TupleValue tv) = Aeson.Object (AesonMap.fromMapText (Aeson.toJSON . tprValue <$> tv))
 
 data EvalError
   = TypeError PositionedExpr TypeErrorDetail
@@ -344,6 +359,8 @@ data EvalError
     NonExistentVariableError PositionedText
   | -- | A variable reference that could refer to at least two definitions.
     AmbiguousVariableError PositionedText PositionedText
+  | -- | Attempt to override a tuple row that is marked final.
+    FinalRowOverrideError PositionedText PositionedText
   deriving (Show)
 
 data TypeErrorDetail = ExpectBoolean | ExpectNumberOrBoolean | ExpectTuple
@@ -351,7 +368,11 @@ data TypeErrorDetail = ExpectBoolean | ExpectNumberOrBoolean | ExpectTuple
 
 data EvalEnvironment
   = TopLevel -- not within a tuple
-  | InsideTuple {eCurrentTuple :: TupleValue, eOuterEnvironment :: EvalEnvironment}
+  | InsideTuple
+      { eCurrentTuple :: TupleValue,
+        eCurrentTuplePrivates :: M.Map Text (),
+        eOuterEnvironment :: EvalEnvironment
+      }
 
 type Eval = ExceptT EvalError (State EvalEnvironment)
 
@@ -410,13 +431,13 @@ evalExpr pexpr =
       case tupleVal of
         TupleValue t -> case M.lookup (pValue label) t of
           Nothing -> throwE (NonExistentLabelError t label)
-          Just (_, v) -> pure v
+          Just (TupleValueRow _ v _) -> pure v
         _ -> throwE (TypeError tuple ExpectTuple)
     Var var -> do
       e <- lift get
-      except (snd <$> lookupVariable var e)
+      except (lookupVariable var e)
 
-lookupVariable :: PositionedText -> EvalEnvironment -> Either EvalError (PositionedText, Value)
+lookupVariable :: PositionedText -> EvalEnvironment -> Either EvalError Value
 lookupVariable p env =
   case env of
     TopLevel -> Left (TopLevelVariableError p)
@@ -426,10 +447,10 @@ lookupVariable p env =
           case lookupVariable p outer of
             Left (TopLevelVariableError _) -> Left (NonExistentVariableError p)
             r -> r
-        Just x@(p1, _) ->
+        Just (TupleValueRow p1 v _) ->
           case lookupVariableOnce outer of
             Just (p2, _) -> Left (AmbiguousVariableError p1 p2)
-            Nothing -> pure x
+            Nothing -> pure v
   where
     lookupVariableOnce :: EvalEnvironment -> Maybe (PositionedText, Value)
     lookupVariableOnce newEnv =
@@ -438,38 +459,47 @@ lookupVariable p env =
         InsideTuple {eCurrentTuple = cur, eOuterEnvironment = outer} ->
           case M.lookup (pValue p) cur of
             Nothing -> lookupVariableOnce outer
-            Just x -> pure x
+            Just (TupleValueRow p2 v _) -> pure (p2, v)
 
 evalTupleExprs :: TupleValue -> [PositionedTupleExpr] -> Eval Value
 evalTupleExprs initial updates = do
   prevEnv <- lift get
-  lift (modify (InsideTuple initial))
-  forM_ updates evalTupleExpr
+  lift (modify (InsideTuple initial M.empty))
+  forM_ updates (evalTupleExpr initial)
   newEnv <- lift get
   lift (put prevEnv)
-  pure (TupleValue (eCurrentTuple newEnv))
+  pure (TupleValue (M.difference (eCurrentTuple newEnv) (eCurrentTuplePrivates newEnv)))
 
-evalTupleExpr :: PositionedTupleExpr -> Eval ()
-evalTupleExpr tp =
+evalTupleExpr :: TupleValue -> PositionedTupleExpr -> Eval ()
+evalTupleExpr initial tp =
   case pValue tp of
-    Row label valExpr -> do
+    Row attr label valExpr -> do
       val <- case pValue valExpr of
         ValuedRow rowValue -> Just <$> evalExpr rowValue
         NullRow -> pure Nothing
       env <- lift get
       case env of
         TopLevel -> error "evalTupleExpr cannot be called"
-        InsideTuple {eCurrentTuple = e, eOuterEnvironment = outer} -> do
-          newe <-
-            M.alterF
-              ( \orig -> case (orig, val) of
-                  (_, Nothing) -> pure Nothing
-                  (Nothing, Just v) -> pure (Just (label, v))
-                  (Just (prevLabel, _), Just _) -> throwE (DuplicateLabelError label prevLabel)
-              )
-              (pValue label)
-              e
-          lift (put InsideTuple {eCurrentTuple = newe, eOuterEnvironment = outer})
+        it@InsideTuple {eCurrentTuple = e, eCurrentTuplePrivates = privates} -> do
+          let finality = case attr of
+                RowFinal -> TupleValueRowFinality True
+                _ -> TupleValueRowFinality False
+          let alterer :: Maybe TupleValueRow -> Eval (Maybe TupleValueRow)
+              alterer orig =
+                case (orig, val) of
+                  (Just (TupleValueRow prevDef _ (TupleValueRowFinality True)), _) ->
+                    throwE (FinalRowOverrideError label prevDef)
+                  (_, Nothing) ->
+                    pure Nothing
+                  (Just (TupleValueRow prevLabel _ _), Just _)
+                    | M.notMember (pValue label) initial ->
+                        throwE (DuplicateLabelError label prevLabel)
+                  (_, Just v) -> pure (Just (TupleValueRow label v finality))
+          newe <- M.alterF alterer (pValue label) e
+          let newPrivates = case attr of
+                RowPrivate -> M.insert (pValue label) () privates
+                _ -> privates
+          lift (put it {eCurrentTuple = newe, eCurrentTuplePrivates = newPrivates})
     Assertion assertion -> do
       val <- evalExpr assertion
       case val of
@@ -493,7 +523,7 @@ evalQCL text = do
           TypeError pe detail ->
             "unexpected type for expression\n" <> explainContext pe ("expecting " <> explainExpectedType detail)
           DuplicateLabelError l1 l2 ->
-            "duplicate label " <> escapedText l1 <> " in tuple\n" <> explainContext l2 "this definition" <> explainContext l1 "earlier definition"
+            "duplicate field label " <> escapedText l1 <> " in tuple\n" <> explainContext l2 "this definition" <> explainContext l1 "earlier definition"
           AssertionFailed pe ->
             "assertion failed\n" <> explainContext pe "evaluates to false"
           NonExistentLabelError tp l ->
@@ -504,6 +534,8 @@ evalQCL text = do
             "variable reference " <> escapedText l <> " does not exist in this lexical scope\n" <> explainContext l "undefined variable"
           AmbiguousVariableError l1 l2 ->
             "variable reference " <> escapedText l1 <> " is ambiguous\n" <> explainContext l1 "possible reference" <> explainContext l2 "another possible reference"
+          FinalRowOverrideError override def ->
+            "field marked as final cannot be overridden\n" <> explainContext override "override here" <> explainContext def "defined as final here"
         escapedText (Positioned {pValue = t}) = T.pack (show t)
         explainExpectedType detail = case detail of
           ExpectBoolean -> "boolean"
@@ -535,7 +567,8 @@ evalQCL text = do
               makeGutter n =
                 let ns = T.pack (show n)
                  in T.replicate (T.length lastLineno - T.length ns) " " <> ns <> gutter
-           in gutterEmpty <> "\n"
+           in gutterEmpty
+                <> "\n"
                 <> foldMap'
                   ( \((lineno, line), (columnBegin, columnEnd)) ->
                       makeGutter lineno
@@ -567,6 +600,7 @@ examples =
     "{x = true,\n y = false\n}",
     "{x = true,\n y = false,\n}",
     "{x = true,\n y = x + 1}",
+    "{private x = true,\n y = x + 1}",
     "{x = true,\n assert(true), }",
     "{x = 5, assert(x % 2\n==\n0), }",
     "{x = 2,\n x = 1}",
@@ -582,6 +616,7 @@ examples =
     "a{x=1}.b",
     "{a = {b = {c=1}}, ret = a.b{x=1}}.ret",
     "{a = {b = {c=1}}, ret = a{x=1}.b}.ret",
+    "{ x=1, y=2, z=3 } {z = 4}",
     "{ x=1, y=2, z=3 } {z = null}",
     "{ x=1, y=2, z=3 } .x",
     "{ x=1, y=2, z=3 }.wwww",
@@ -590,7 +625,9 @@ examples =
     "{ x=1, y=2, z={a=1, b=a} } ",
     "{ x=1, y=2, z={x=1, y=x} } ",
     "{ x = 1, y = 2, z = { a = x + 1, b = y + a + 2}}.z.b",
-    "{ a=1, b={ a=1, b={ a=1, b={ c=a } } } }"
+    "{ a=1, b={ a=1, b={ a=1, b={ c=a } } } }",
+    "{ final meaningOfLife = 42 } { meaningOfLife = 43 }",
+    "{ final meaningOfLife = 42 } { meaningOfLife = null }"
   ]
 
 runExamples :: IO ()
