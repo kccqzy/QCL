@@ -708,7 +708,10 @@ error:
   |                                ^^^^^^^^^^^^^ override here
   |
 1 | { final meaningOfLife = 42 } { meaningOfLife = 43 }
-  |         ^^^^^^^^^^^^^ defined as final here
+  |         ^^^^^^^^^^^^^ defined here
+  |
+1 | { final meaningOfLife = 42 } { meaningOfLife = 43 }
+  |   ^^^^^ marked as final here
 
 ```
 
@@ -717,7 +720,8 @@ error:
 QCL:
 
 ```
-{ final meaningOfLife = 42 } { meaningOfLife = null }
+{ final
+  meaningOfLife = 42 } { meaningOfLife = null }
 ```
 
 Error message:
@@ -725,10 +729,13 @@ Error message:
 error:
     field marked as final cannot be overridden
   |
-1 | { final meaningOfLife = 42 } { meaningOfLife = null }
-  |                                ^^^^^^^^^^^^^ override here
+2 |   meaningOfLife = 42 } { meaningOfLife = null }
+  |                          ^^^^^^^^^^^^^ override here
   |
-1 | { final meaningOfLife = 42 } { meaningOfLife = null }
-  |         ^^^^^^^^^^^^^ defined as final here
+2 |   meaningOfLife = 42 } { meaningOfLife = null }
+  |   ^^^^^^^^^^^^^ defined here
+  |
+1 | { final
+  |   ^^^^^ marked as final here
 
 ```

@@ -54,7 +54,7 @@ examples =
     "{ x = 1, y = 2, z = { a = x + 1, b = y + a + 2}}.z.b",
     "{ a=1, b={ a=1, b={ a=1, b={ c=a } } } }",
     "{ final meaningOfLife = 42 } { meaningOfLife = 43 }",
-    "{ final meaningOfLife = 42 } { meaningOfLife = null }"
+    "{ final\n  meaningOfLife = 42 } { meaningOfLife = null }"
   ]
 
 main :: IO ()

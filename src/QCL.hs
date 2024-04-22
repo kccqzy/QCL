@@ -66,11 +66,11 @@ data Expr
   | Member PositionedExpr PositionedText
   deriving (Show)
 
-data RowAttribute = RowRegular | RowFinal | RowPrivate
+data RowAttribute = RowFinal | RowPrivate
   deriving (Show)
 
 data TupleExpr
-  = Row RowAttribute PositionedText PositionedRowExpr
+  = Row (Maybe (Positioned RowAttribute)) PositionedText PositionedRowExpr
   | Assertion PositionedExpr
   deriving (Show)
 
@@ -260,7 +260,7 @@ expr = mdo
   tupleItem <- E.rule $ tupleRow <|> tupleAssertion
 
   tupleRow :: E.Prod r Text PositionedText PositionedTupleExpr <- E.rule $ do
-    attr <- pure RowRegular <|> (RowFinal <$ lit "final") <|> (RowPrivate <$ lit "private")
+    attr <- pure Nothing <|> (Just <$> (RowFinal <$$ lit "final")) <|> (Just <$> (RowPrivate <$$ lit "private"))
     k <- E.terminal identifier E.<?> "identifier"
     _ <- lit "="
     v <- tupleRowValue
@@ -334,7 +334,7 @@ data TupleValueRow
   }
   deriving (Show)
 
-newtype TupleValueRowFinality = TupleValueRowFinality Bool
+newtype TupleValueRowFinality = TupleValueRowFinality (Maybe (Positioned ()))
   deriving (Show)
 
 instance Aeson.ToJSON Value where
@@ -358,7 +358,7 @@ data EvalError
   | -- | A variable reference that could refer to at least two definitions.
     AmbiguousVariableError PositionedText PositionedText
   | -- | Attempt to override a tuple row that is marked final.
-    FinalRowOverrideError PositionedText PositionedText
+    FinalRowOverrideError PositionedText PositionedText (Positioned ())
   deriving (Show)
 
 data TypeErrorDetail = ExpectBoolean | ExpectNumberOrBoolean | ExpectTuple
@@ -480,13 +480,13 @@ evalTupleExpr initial tp =
         TopLevel -> error "evalTupleExpr cannot be called"
         it@InsideTuple {eCurrentTuple = e, eCurrentTuplePrivates = privates} -> do
           let finality = case attr of
-                RowFinal -> TupleValueRowFinality True
-                _ -> TupleValueRowFinality False
+                Just (p@Positioned {pValue = RowFinal}) -> TupleValueRowFinality (Just (() <$ p))
+                _ -> TupleValueRowFinality Nothing
           let alterer :: Maybe TupleValueRow -> Eval (Maybe TupleValueRow)
               alterer orig =
                 case (orig, val) of
-                  (Just (TupleValueRow prevDef _ (TupleValueRowFinality True)), _) ->
-                    throwE (FinalRowOverrideError label prevDef)
+                  (Just (TupleValueRow prevDef _ (TupleValueRowFinality (Just finalPos))), _) ->
+                    throwE (FinalRowOverrideError label prevDef finalPos)
                   (_, Nothing) ->
                     pure Nothing
                   (Just (TupleValueRow prevLabel _ _), Just _)
@@ -495,7 +495,7 @@ evalTupleExpr initial tp =
                   (_, Just v) -> pure (Just (TupleValueRow label v finality))
           newe <- M.alterF alterer (pValue label) e
           let newPrivates = case attr of
-                RowPrivate -> M.insert (pValue label) () privates
+                Just (Positioned {pValue = RowPrivate}) -> M.insert (pValue label) () privates
                 _ -> privates
           lift (put it {eCurrentTuple = newe, eCurrentTuplePrivates = newPrivates})
     Assertion assertion -> do
@@ -532,8 +532,8 @@ evalQCL text = do
             "variable reference " <> escapedText l <> " does not exist in this lexical scope\n" <> explainContext l "undefined variable"
           AmbiguousVariableError l1 l2 ->
             "variable reference " <> escapedText l1 <> " is ambiguous\n" <> explainContext l1 "possible reference" <> explainContext l2 "another possible reference"
-          FinalRowOverrideError override def ->
-            "field marked as final cannot be overridden\n" <> explainContext override "override here" <> explainContext def "defined as final here"
+          FinalRowOverrideError override def final ->
+            "field marked as final cannot be overridden\n" <> explainContext override "override here" <> explainContext def "defined here" <> explainContext final "marked as final here"
         escapedText (Positioned {pValue = t}) = T.pack (show t)
         explainExpectedType detail = case detail of
           ExpectBoolean -> "boolean"
