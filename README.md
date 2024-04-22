@@ -373,6 +373,28 @@ error:
 QCL:
 
 ```
+{
+ a = 1,
+ b = a + a,
+ c = a + b + c
+}.c
+```
+
+Error message:
+```
+error:
+    variable reference "c" does not exist in this lexical scope
+  |
+4 |  c = a + b + c
+  |              ^ undefined variable
+
+```
+
+------------
+
+QCL:
+
+```
 []
 ```
 
@@ -618,3 +640,25 @@ JSON result:
 ```
 6
 ```
+
+------------
+
+QCL:
+
+```
+{ a=1, b={ a=1, b={ a=1, b={ c=a } } } }
+```
+
+Error message:
+```
+error:
+    variable reference "a" is ambiguous
+  |
+1 | { a=1, b={ a=1, b={ a=1, b={ c=a } } } }
+  |                     ^ possible reference
+  |
+1 | { a=1, b={ a=1, b={ a=1, b={ c=a } } } }
+  |            ^ another possible reference
+
+```
+

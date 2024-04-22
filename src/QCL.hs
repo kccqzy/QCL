@@ -421,12 +421,24 @@ lookupVariable p env =
   case env of
     TopLevel -> Left (TopLevelVariableError p)
     InsideTuple {eCurrentTuple = cur, eOuterEnvironment = outer} ->
-      case (M.lookup (pValue p) cur, lookupVariable p outer) of
-        (Nothing, e@(Left _)) -> e
-        (Just (p1, _), Left (AmbiguousVariableError p2 _)) -> Left (AmbiguousVariableError p1 p2)
-        (Just x, Left _) -> pure x
-        (Nothing, Right x) -> pure x
-        (Just (p1, _), Right (p2, _)) -> Left (AmbiguousVariableError p1 p2)
+      case M.lookup (pValue p) cur of
+        Nothing ->
+          case lookupVariable p outer of
+            Left (TopLevelVariableError _) -> Left (NonExistentVariableError p)
+            r -> r
+        Just x@(p1, _) ->
+          case lookupVariableOnce outer of
+            Just (p2, _) -> Left (AmbiguousVariableError p1 p2)
+            Nothing -> pure x
+  where
+    lookupVariableOnce :: EvalEnvironment -> Maybe (PositionedText, Value)
+    lookupVariableOnce newEnv =
+      case newEnv of
+        TopLevel -> Nothing
+        InsideTuple {eCurrentTuple = cur, eOuterEnvironment = outer} ->
+          case M.lookup (pValue p) cur of
+            Nothing -> lookupVariableOnce outer
+            Just x -> pure x
 
 evalTupleExprs :: TupleValue -> [PositionedTupleExpr] -> Eval Value
 evalTupleExprs initial updates = do
@@ -561,6 +573,7 @@ examples =
     "1 + { a = 2, b = a + 3}.b ",
     "1 + { a = 2, b = a + 3}.b && c",
     "1 + { a = 2, b = a + 3}",
+    "{\n a = 1,\n b = a + a,\n c = a + b + c\n}.c",
     "[]",
     "[1, true]",
     "a{x=1} {y=+x}",
@@ -576,7 +589,8 @@ examples =
     "{ x=1, y=2, z={a=1, b=y} } ",
     "{ x=1, y=2, z={a=1, b=a} } ",
     "{ x=1, y=2, z={x=1, y=x} } ",
-    "{ x = 1, y = 2, z = { a = x + 1, b = y + a + 2}}.z.b"
+    "{ x = 1, y = 2, z = { a = x + 1, b = y + a + 2}}.z.b",
+    "{ a=1, b={ a=1, b={ a=1, b={ c=a } } } }"
   ]
 
 runExamples :: IO ()
