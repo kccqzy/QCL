@@ -1,4 +1,13 @@
 module Main where
 
+import qualified Data.Aeson as Aeson
+import qualified Data.ByteString.Lazy.Char8 as BL
+import qualified Data.Text.IO.Utf8 as TIO
+import QCL
+
 main :: IO ()
-main = putStrLn "Hello, Haskell!"
+main = do
+  text <- TIO.getContents
+  case evalQCL text of
+    Right value -> BL.putStrLn (Aeson.encode value)
+    Left e -> TIO.putStrLn e

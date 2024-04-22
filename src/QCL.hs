@@ -25,7 +25,7 @@ import qualified Data.Map.Strict as M
 import Data.Scientific (fromFloatDigits)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
+import qualified Data.Text.IO.Utf8 as TIO
 import qualified Data.Text.Read as TR
 import Data.Vector (fromList)
 import qualified Text.Earley as E
