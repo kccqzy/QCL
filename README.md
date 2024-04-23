@@ -552,6 +552,20 @@ JSON result:
 QCL:
 
 ```
+{ x=1, y=2, z=3 } {z = 4 + z}
+```
+
+JSON result:
+
+```
+{"x":1,"y":2,"z":7}
+```
+
+------------
+
+QCL:
+
+```
 { x=1, y=2, z=3 } {z = null}
 ```
 
@@ -739,3 +753,193 @@ error:
   |   ^^^^^ marked as final here
 
 ```
+
+------------
+
+QCL:
+
+```
+{ a = abstract }
+```
+
+Error message:
+```
+error:
+    abstract field cannot be used in non-abstract tuples
+  |
+1 | { a = abstract }
+  |       ^^^^^^^^ abstract field
+
+```
+
+------------
+
+QCL:
+
+```
+{}.eval
+```
+
+Error message:
+```
+error:
+    unexpected type for expression
+  |
+1 | {}.eval
+  | ^^ expecting abstract tuple
+
+```
+
+------------
+
+QCL:
+
+```
+abstract {
+  a = abstract,
+  assert (a % 2 == 0),
+  ret = a / 2,
+}
+```
+
+JSON result:
+
+```
+null
+```
+
+------------
+
+QCL:
+
+```
+abstract {
+  a = abstract,
+  assert (a % 2 == 0),
+  ret = a / 2,
+} { a = 42 }
+```
+
+JSON result:
+
+```
+null
+```
+
+------------
+
+QCL:
+
+```
+abstract {
+  a = abstract,
+  assert (a % 2 == 0),
+  ret = a / 2,
+} { a = 42 }
+.eval
+```
+
+Error message:
+```
+error:
+    unimplemented feature
+  |
+1 | abstract {
+  | ^^^^^^^^^^
+2 |   a = abstract,
+  | ^^^^^^^^^^^^^^^
+3 |   assert (a % 2 == 0),
+  | ^^^^^^^^^^^^^^^^^^^^^^
+4 |   ret = a / 2,
+  | ^^^^^^^^^^^^^^
+5 | } { a = 42 }
+  | ^^^^^^^^^^^^
+6 | .eval
+  | ^^^^^ unimplemented
+
+```
+
+------------
+
+QCL:
+
+```
+{
+  checkEven = abstract {
+    a = abstract,
+    assert(a % 2 == 0),
+    ret = a / 2,
+  },
+  e1 = checkEven { a = 4 },
+  e2 = checkEven { a = 5 },
+} { r1 = e1.eval, r2 = e2.eval }
+```
+
+Error message:
+```
+error:
+    unimplemented feature
+  |
+9 | } { r1 = e1.eval, r2 = e2.eval }
+  |          ^^^^^^^ unimplemented
+
+```
+
+------------
+
+QCL:
+
+```
+{a=1, b=abstract{c=a}.eval}
+```
+
+Error message:
+```
+error:
+    unimplemented feature
+  |
+1 | {a=1, b=abstract{c=a}.eval}
+  |         ^^^^^^^^^^^^^^^^^^ unimplemented
+
+```
+
+------------
+
+QCL:
+
+```
+abstract{
+  a= abstract,
+  b= abstract{
+    x= abstract,
+    ret= x+1
+  },
+  ret= a+1+b{x=a*10}.eval.ret
+} { a = 5 }.eval.ret
+```
+
+Error message:
+```
+error:
+    unimplemented feature
+  |
+1 | abstract{
+  | ^^^^^^^^^
+2 |   a= abstract,
+  | ^^^^^^^^^^^^^^
+3 |   b= abstract{
+  | ^^^^^^^^^^^^^^
+4 |     x= abstract,
+  | ^^^^^^^^^^^^^^^^
+5 |     ret= x+1
+  | ^^^^^^^^^^^^
+6 |   },
+  | ^^^^
+7 |   ret= a+1+b{x=a*10}.eval.ret
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+8 | } { a = 5 }.eval.ret
+  | ^^^^^^^^^^^^^^^^ unimplemented
+
+```
+
+------------

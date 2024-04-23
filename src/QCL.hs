@@ -6,7 +6,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StrictData #-}
 
-module QCL (Positioned (..), Expr (..), TupleExpr (..), RowExpr (..), evalQCL) where
+module QCL (Value, evalQCL) where
 
 import Control.Applicative
 import Control.Monad
@@ -61,6 +61,8 @@ data Expr
   | Or PositionedExpr PositionedExpr
   | Tuple [PositionedTupleExpr]
   | TupleUpdate PositionedExpr (Positioned [PositionedTupleExpr])
+  | AbstractTuple (Positioned [PositionedTupleExpr])
+  | EvalAbstract PositionedExpr
   | List [PositionedExpr]
   | Var PositionedText
   | Member PositionedExpr PositionedText
@@ -77,6 +79,7 @@ data TupleExpr
 data RowExpr
   = ValuedRow PositionedExpr
   | NullRow
+  | AbstractRow
   deriving (Show)
 
 tokenize :: Text -> [PositionedText]
@@ -112,7 +115,7 @@ multiCharPunct :: [Text]
 multiCharPunct = ["&&", "||", "==", "!=", "<=", ">=", "//"]
 
 reservedWords :: [Text]
-reservedWords = ["true", "false", "assert", "null", "private", "final"]
+reservedWords = ["true", "false", "assert", "null", "private", "final", "abstract", "eval"]
 
 identifier :: PositionedText -> Maybe PositionedText
 identifier pt = do
@@ -216,9 +219,7 @@ expr = mdo
             op <- UnaryMinus <$$ lit "-" <|> UnaryPlus <$$ lit "+" <|> Not <$$ lit "!"
             t <- unaryExpr
             pure (fromPositionApp op t)
-       in un <|> atom
-
-  atom <- E.rule $ bool <|> number <|> memberOrUpdateExpr
+       in un <|> bool <|> number <|> memberOrEvalOrUpdateExpr
 
   bool :: E.Prod r Text PositionedText PositionedExpr <-
     E.rule $ (Boolean True <$$ lit "true") <|> (Boolean False <$$ lit "false")
@@ -231,26 +232,32 @@ expr = mdo
             _ -> Nothing
        in (Number <$>) <$> E.terminal readNumber E.<?> "number literal"
 
-  memberOrUpdateExpr :: E.Prod r Text PositionedText PositionedExpr <-
+  memberOrEvalOrUpdateExpr :: E.Prod r Text PositionedText PositionedExpr <-
     E.rule $
-      let member = do
-            obj <- memberOrUpdateExpr
+      let memberOrEval = do
+            obj <- memberOrEvalOrUpdateExpr
             _ <- lit "."
-            mem <- E.terminal identifier E.<?> "identifier"
-            pure (fromPosition2 obj mem (Member obj mem))
+            memOrEval <- (Left <$> (E.terminal identifier E.<?> "identifier")) <|> (Right <$> lit "eval")
+            pure $ case memOrEval of
+              Left mem -> withPosition2 Member obj mem
+              Right ev -> fromPosition2 obj ev (EvalAbstract obj)
           update = do
-            obj <- memberOrUpdateExpr
+            obj <- memberOrEvalOrUpdateExpr
             updates <- between (lit "{") (lit "}") tupleContents
-            pure (fromPosition2 obj updates (TupleUpdate obj updates))
-       in member <|> update <|> var <|> surroundExpr
-
-  surroundExpr <- E.rule $ parenthesized <|> tuple <|> list
+            pure (withPosition2 TupleUpdate obj updates)
+       in memberOrEval <|> update <|> var <|> parenthesized <|> tuple <|> list <|> abstractTuple
 
   parenthesized :: E.Prod r Text PositionedText PositionedExpr <-
     E.rule $ pValue <$> between (lit "(") (lit ")") val
 
   var :: E.Prod r Text PositionedText PositionedExpr <-
     E.rule $ (\t -> Var t <$ t) <$> E.terminal identifier E.<?> "identifier"
+
+  abstractTuple :: E.Prod r Text PositionedText PositionedExpr <-
+    E.rule $ do
+      kw <- lit "abstract"
+      tp <- between (lit "{") (lit "}") tupleContents
+      pure (withPosition2 (const AbstractTuple) kw tp)
 
   tuple :: E.Prod r Text PositionedText PositionedExpr <-
     E.rule $ (Tuple <$>) <$> between (lit "{") (lit "}") tupleContents
@@ -267,7 +274,7 @@ expr = mdo
     pure (fromPosition2 k v (Row attr k v))
 
   let valuedRow pe = ValuedRow pe <$ pe
-  tupleRowValue <- E.rule $ (NullRow <$$ lit "null") <|> (valuedRow <$> val)
+  tupleRowValue <- E.rule $ (NullRow <$$ lit "null") <|> (AbstractRow <$$ lit "abstract") <|> (valuedRow <$> val)
 
   tupleAssertion <- E.rule $ do
     l <- lit "assert"
@@ -321,6 +328,7 @@ data Value
   = NumberValue Double
   | BooleanValue Bool
   | TupleValue TupleValue
+  | AbstractTupleValue AbstractTupleValue
   | ListValue [Value]
   deriving (Show)
 
@@ -337,11 +345,17 @@ data TupleValueRow
 newtype TupleValueRowFinality = TupleValueRowFinality (Maybe (Positioned ()))
   deriving (Show)
 
+data AbstractTupleValue
+  = UnevaluatedTuple (Positioned [PositionedTupleExpr])
+  | UnevaluatedTupleUpdate AbstractTupleValue (Positioned [PositionedTupleExpr])
+  deriving (Show)
+
 instance Aeson.ToJSON Value where
   toJSON (NumberValue n) = Aeson.Number (fromFloatDigits n)
   toJSON (BooleanValue b) = Aeson.Bool b
   toJSON (ListValue l) = Aeson.Array (fromList (Aeson.toJSON <$> l))
   toJSON (TupleValue tv) = Aeson.Object (AesonMap.fromMapText (Aeson.toJSON . tprValue <$> tv))
+  toJSON (AbstractTupleValue _) = Aeson.Null -- NOTE: Maybe let's not have this?
 
 data EvalError
   = TypeError PositionedExpr TypeErrorDetail
@@ -359,10 +373,11 @@ data EvalError
     AmbiguousVariableError PositionedText PositionedText
   | -- | Attempt to override a tuple row that is marked final.
     FinalRowOverrideError PositionedText PositionedText (Positioned ())
-  deriving (Show)
+  | -- | Making a field abstract when not inside an abstract tuple.
+    AbstractInNonAbstractTuple (Positioned ())
+  | Unimplemented (Positioned ())
 
-data TypeErrorDetail = ExpectBoolean | ExpectNumberOrBoolean | ExpectTuple
-  deriving (Show)
+data TypeErrorDetail = ExpectBoolean | ExpectNumberOrBoolean | ExpectTuple | ExpectAbstractTuple
 
 data EvalEnvironment
   = TopLevel -- not within a tuple
@@ -419,10 +434,12 @@ evalExpr pexpr =
     Not a -> evalNumericBoolFunc1 (== 0) a
     List pes -> ListValue <$> traverse evalExpr pes
     Tuple tupleExprs -> evalTupleExprs M.empty tupleExprs
+    AbstractTuple p -> pure (AbstractTupleValue (UnevaluatedTuple p)) -- TODO: check for scope
     TupleUpdate origVal updates -> do
       orig <- evalExpr origVal
       case orig of
         TupleValue t -> evalTupleExprs t (pValue updates)
+        AbstractTupleValue t -> pure (AbstractTupleValue (UnevaluatedTupleUpdate t updates))
         _ -> throwE (TypeError origVal ExpectTuple)
     Member tuple label -> do
       tupleVal <- evalExpr tuple
@@ -434,6 +451,11 @@ evalExpr pexpr =
     Var var -> do
       e <- lift get
       except (lookupVariable var e)
+    EvalAbstract tempExpr -> do
+      tem <- evalExpr tempExpr
+      case tem of
+        AbstractTupleValue _ -> throwE (Unimplemented (() <$ pexpr))
+        _ -> throwE (TypeError tempExpr ExpectAbstractTuple)
 
 lookupVariable :: PositionedText -> EvalEnvironment -> Either EvalError Value
 lookupVariable p env =
@@ -475,6 +497,7 @@ evalTupleExpr initial tp =
       val <- case pValue valExpr of
         ValuedRow rowValue -> Just <$> evalExpr rowValue
         NullRow -> pure Nothing
+        AbstractRow -> throwE (AbstractInNonAbstractTuple (() <$ valExpr))
       env <- lift get
       case env of
         TopLevel -> error "evalTupleExpr cannot be called"
@@ -534,11 +557,16 @@ evalQCL text = do
             "variable reference " <> escapedText l1 <> " is ambiguous\n" <> explainContext l1 "possible reference" <> explainContext l2 "another possible reference"
           FinalRowOverrideError override def final ->
             "field marked as final cannot be overridden\n" <> explainContext override "override here" <> explainContext def "defined here" <> explainContext final "marked as final here"
+          AbstractInNonAbstractTuple abstract ->
+            "abstract field cannot be used in non-abstract tuples\n" <> explainContext abstract "abstract field"
+          Unimplemented p ->
+            "unimplemented feature\n" <> explainContext p "unimplemented"
         escapedText (Positioned {pValue = t}) = T.pack (show t)
         explainExpectedType detail = case detail of
           ExpectBoolean -> "boolean"
           ExpectNumberOrBoolean -> "number or boolean"
           ExpectTuple -> "tuple"
+          ExpectAbstractTuple -> "abstract tuple"
         explainTuple tp = case M.toList tp of
           [] -> "tuple is empty"
           [(a, _)] -> "tuple has sole label " <> a

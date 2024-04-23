@@ -44,6 +44,7 @@ examples =
     "{a = {b = {c=1}}, ret = a.b{x=1}}.ret",
     "{a = {b = {c=1}}, ret = a{x=1}.b}.ret",
     "{ x=1, y=2, z=3 } {z = 4}",
+    "{ x=1, y=2, z=3 } {z = 4 + z}",
     "{ x=1, y=2, z=3 } {z = null}",
     "{ x=1, y=2, z=3 } .x",
     "{ x=1, y=2, z=3 }.wwww",
@@ -51,10 +52,34 @@ examples =
     "{ x=1, y=2, z={a=1, b=y} } ",
     "{ x=1, y=2, z={a=1, b=a} } ",
     "{ x=1, y=2, z={x=1, y=x} } ",
+    "{ a=1, b={ x=2, y=3 } } { b = b { y = y + x + a } }",
     "{ x = 1, y = 2, z = { a = x + 1, b = y + a + 2}}.z.b",
     "{ a=1, b={ a=1, b={ a=1, b={ c=a } } } }",
     "{ final meaningOfLife = 42 } { meaningOfLife = 43 }",
-    "{ final\n  meaningOfLife = 42 } { meaningOfLife = null }"
+    "{ final\n  meaningOfLife = 42 } { meaningOfLife = null }",
+    "{ a = abstract }",
+    "{}.eval",
+    "abstract {\n  a = abstract,\n  assert (a % 2 == 0),\n  ret = a / 2,\n}",
+    "abstract {\n  a = abstract,\n  assert (a % 2 == 0),\n  ret = a / 2,\n} { a = 42 }",
+    "abstract {\n  a = abstract,\n  assert (a % 2 == 0),\n  ret = a / 2,\n} { a = 42 }\n.eval",
+    "{\n\
+    \  checkEven = abstract {\n\
+    \    a = abstract,\n\
+    \    assert(a % 2 == 0),\n\
+    \    ret = a / 2,\n\
+    \  },\n\
+    \  e1 = checkEven { a = 4 },\n\
+    \  e2 = checkEven { a = 5 },\n\
+    \} { r1 = e1.eval, r2 = e2.eval }",
+    "{a=1, b=abstract{c=a}.eval}",
+    "abstract{\n\
+    \  a= abstract,\n\
+    \  b= abstract{\n\
+    \    x= abstract,\n\
+    \    ret= x+1\n\
+    \  },\n\
+    \  ret= a+1+b{x=a*10}.eval.ret\n\
+    \} { a = 5 }.eval.ret"
   ]
 
 main :: IO ()
