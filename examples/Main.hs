@@ -69,18 +69,29 @@ examples =
     \    assert(a % 2 == 0),\n\
     \    ret = a / 2,\n\
     \  },\n\
-    \  e1 = checkEven { a = 4 },\n\
-    \  e2 = checkEven { a = 5 },\n\
-    \} { r1 = e1.eval, r2 = e2.eval }",
-    "{a=1, b=abstract{c=a}.eval}",
+    \  e1 = checkEven { a = 100 },\n\
+    \} { e1 = e1.eval.ret, checkEven = null }",
+    "{\n\
+    \  checkEven = abstract {\n\
+    \    a = abstract,\n\
+    \    assert(a % 2 == 0),\n\
+    \    ret = a / 2,\n\
+    \  },\n\
+    \  e1 = checkEven { a = 105 },\n\
+    \} { e1 = e1.eval.ret, checkEven = null }",
+    "{a=1, b=abstract{c=a}.eval, assert (b.c==a)}",
+    "{a=1, b=abstract{c=abstract}}{b=b{c=a}.eval, assert (b.c==a)}",
+    "{a=1, b=abstract{c=abstract}}{a=2, b=b{c=a}.eval, assert (b.c==a)}",
     "abstract{\n\
     \  a= abstract,\n\
     \  b= abstract{\n\
     \    x= abstract,\n\
-    \    ret= x+1\n\
+    \    ret= x*10\n\
     \  },\n\
-    \  ret= a+1+b{x=a*10}.eval.ret\n\
-    \} { a = 5 }.eval.ret"
+    \  ret= a+b{x=a*100}.eval.ret\n\
+    \} { a = 5 }.eval.ret",
+    "# Mutual reference is not allowed\n\
+    \abstract { a = abstract, b = a+1 } { a = b+1 } .eval"
   ]
 
 main :: IO ()

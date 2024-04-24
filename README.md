@@ -326,10 +326,10 @@ Error message:
 error:
     duplicate field label "x" in tuple
   |
-1 | {x = 2,
+2 |  x = 1}
   |  ^ this definition
   |
-2 |  x = 1}
+1 | {x = 2,
   |  ^ earlier definition
 
 ```
@@ -399,7 +399,7 @@ QCL:
 Error message:
 ```
 error:
-    variable reference "c" does not exist in this lexical scope
+    variable reference "c" does not exist
   |
 4 |  c = a + b + c
   |              ^ undefined variable
@@ -868,24 +868,10 @@ abstract {
 .eval
 ```
 
-Error message:
-```
-error:
-    unimplemented feature
-  |
-1 | abstract {
-  | ^^^^^^^^^^
-2 |   a = abstract,
-  | ^^^^^^^^^^^^^^^
-3 |   assert (a % 2 == 0),
-  | ^^^^^^^^^^^^^^^^^^^^^^
-4 |   ret = a / 2,
-  | ^^^^^^^^^^^^^^
-5 | } { a = 42 }
-  | ^^^^^^^^^^^^
-6 | .eval
-  | ^^^^^ unimplemented
+JSON result:
 
+```
+{"a":42,"ret":21}
 ```
 
 ------------
@@ -899,18 +885,38 @@ QCL:
     assert(a % 2 == 0),
     ret = a / 2,
   },
-  e1 = checkEven { a = 4 },
-  e2 = checkEven { a = 5 },
-} { r1 = e1.eval, r2 = e2.eval }
+  e1 = checkEven { a = 100 },
+} { e1 = e1.eval.ret, checkEven = null }
+```
+
+JSON result:
+
+```
+{"e1":50}
+```
+
+------------
+
+QCL:
+
+```
+{
+  checkEven = abstract {
+    a = abstract,
+    assert(a % 2 == 0),
+    ret = a / 2,
+  },
+  e1 = checkEven { a = 105 },
+} { e1 = e1.eval.ret, checkEven = null }
 ```
 
 Error message:
 ```
 error:
-    unimplemented feature
+    assertion failed
   |
-9 | } { r1 = e1.eval, r2 = e2.eval }
-  |          ^^^^^^^ unimplemented
+4 |     assert(a % 2 == 0),
+  |            ^^^^^^^^^^ evaluates to false
 
 ```
 
@@ -919,17 +925,41 @@ error:
 QCL:
 
 ```
-{a=1, b=abstract{c=a}.eval}
+{a=1, b=abstract{c=a}.eval, assert (b.c==a)}
 ```
 
-Error message:
-```
-error:
-    unimplemented feature
-  |
-1 | {a=1, b=abstract{c=a}.eval}
-  |         ^^^^^^^^^^^^^^^^^^ unimplemented
+JSON result:
 
+```
+{"a":1,"b":{"c":1}}
+```
+
+------------
+
+QCL:
+
+```
+{a=1, b=abstract{c=abstract}}{b=b{c=a}.eval, assert (b.c==a)}
+```
+
+JSON result:
+
+```
+{"a":1,"b":{"c":1}}
+```
+
+------------
+
+QCL:
+
+```
+{a=1, b=abstract{c=abstract}}{a=2, b=b{c=a}.eval, assert (b.c==a)}
+```
+
+JSON result:
+
+```
+{"a":2,"b":{"c":2}}
 ```
 
 ------------
@@ -941,33 +971,34 @@ abstract{
   a= abstract,
   b= abstract{
     x= abstract,
-    ret= x+1
+    ret= x*10
   },
-  ret= a+1+b{x=a*10}.eval.ret
+  ret= a+b{x=a*100}.eval.ret
 } { a = 5 }.eval.ret
+```
+
+JSON result:
+
+```
+5005
+```
+
+------------
+
+QCL:
+
+```
+# Mutual reference is not allowed
+abstract { a = abstract, b = a+1 } { a = b+1 } .eval
 ```
 
 Error message:
 ```
 error:
-    unimplemented feature
+    variable reference "b" does not exist
   |
-1 | abstract{
-  | ^^^^^^^^^
-2 |   a= abstract,
-  | ^^^^^^^^^^^^^^
-3 |   b= abstract{
-  | ^^^^^^^^^^^^^^
-4 |     x= abstract,
-  | ^^^^^^^^^^^^^^^^
-5 |     ret= x+1
-  | ^^^^^^^^^^^^
-6 |   },
-  | ^^^^
-7 |   ret= a+1+b{x=a*10}.eval.ret
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-8 | } { a = 5 }.eval.ret
-  | ^^^^^^^^^^^^^^^^ unimplemented
+2 | abstract { a = abstract, b = a+1 } { a = b+1 } .eval
+  |                                          ^ undefined variable
 
 ```
 
