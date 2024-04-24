@@ -21,7 +21,8 @@ Don't use this in production. This is my playground.
 
 # Demo
 
-This shows real examples. Feel free to run it using the `runExamples` function.
+This shows real examples. Feel free to run it using the *configlang-examples*
+executable.
 
 QCL:
 
@@ -668,6 +669,34 @@ error:
 1 | { x=1, y=2, z={x=1, y=x} }
   |   ^ another possible reference
 
+```
+
+------------
+
+QCL:
+
+```
+{ a=1, b={ x=2, y=3 } } { b = b { y = y + x + a } }
+```
+
+JSON result:
+
+```
+{"a":1,"b":{"x":2,"y":6}}
+```
+
+------------
+
+QCL:
+
+```
+{ a=1, b={ x=2, y=3 } } { b { y = y + x + a } }
+```
+
+JSON result:
+
+```
+{"a":1,"b":{"x":2,"y":6}}
 ```
 
 ------------

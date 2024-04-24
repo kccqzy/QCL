@@ -269,12 +269,29 @@ expr = mdo
   tupleRow :: E.Prod r Text PositionedText PositionedTupleExpr <- E.rule $ do
     attr <- pure Nothing <|> (Just <$> (RowFinal <$$ lit "final")) <|> (Just <$> (RowPrivate <$$ lit "private"))
     k <- E.terminal identifier E.<?> "identifier"
-    _ <- lit "="
-    v <- tupleRowValue
-    pure (fromPosition2 k v (Row attr k v))
+    let assignedValue = const <$> (lit "=" *> tupleRowValue)
+    let updateSyntaxSugar =
+          -- Syntax sugar to perform a tuple update without the = token. Due to
+          -- ApplicativeDo desugaring limitations we cannot use the identifier
+          -- directly so we have to parse into a function that accepts it.
+          ( \updates parsedIdentifier ->
+              fromPosition2
+                parsedIdentifier
+                updates
+                ( ValuedRow
+                    ( withPosition2
+                        TupleUpdate
+                        (Var parsedIdentifier <$ parsedIdentifier)
+                        updates
+                    )
+                )
+          )
+            <$> between (lit "{") (lit "}") tupleContents
+    vf <- assignedValue <|> updateSyntaxSugar
+    pure (let v = vf k in fromPosition2 k v (Row attr k v))
 
   let valuedRow pe = ValuedRow pe <$ pe
-  tupleRowValue <- E.rule $ (NullRow <$$ lit "null") <|> (AbstractRow <$$ lit "abstract") <|> (valuedRow <$> val)
+  tupleRowValue :: E.Prod r Text PositionedText PositionedRowExpr <- E.rule $ (NullRow <$$ lit "null") <|> (AbstractRow <$$ lit "abstract") <|> (valuedRow <$> val)
 
   tupleAssertion <- E.rule $ do
     l <- lit "assert"
