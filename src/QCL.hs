@@ -21,6 +21,7 @@ import Data.Foldable
 import Data.Functor
 import Data.List (sortBy, unfoldr)
 import qualified Data.Map.Strict as M
+import Data.Monoid (First (..))
 import Data.Ord (comparing)
 import Data.Scientific (fromFloatDigits)
 import Data.Semigroup (Max (..))
@@ -413,14 +414,15 @@ data EvalError
 data TypeErrorDetail = ExpectBoolean | ExpectNumberOrBoolean | ExpectTuple | ExpectAbstractTuple
   deriving (Show)
 
-data EvalEnvironment
-  = TopLevel -- not within a tuple
-  | InsideTuple
-      { eCurrentTuple :: TupleValue,
-        eCurrentTuplePrivates :: M.Map Text (),
-        eOuterEnvironment :: EvalEnvironment
-      }
+data InsideTupleEnv = InsideTupleEnv
+  { eCurrentTuple :: TupleValue,
+    eCurrentTuplePrivates :: M.Map Text ()
+  }
   deriving (Show)
+
+-- | The evaluation environment is a series of environments that represents the
+-- nesting structure of the original code.
+type EvalEnvironment = [InsideTupleEnv]
 
 type Eval = ReaderT EvalEnvironment (Either EvalError)
 
@@ -497,8 +499,8 @@ evalExpr pexpr =
 lookupVariable :: PositionedText -> Eval Value
 lookupVariable p = ReaderT $ \env ->
   case env of
-    TopLevel -> Left (TopLevelVariableError p)
-    InsideTuple {eCurrentTuple = cur, eOuterEnvironment = outer} ->
+    [] -> Left (TopLevelVariableError p)
+    InsideTupleEnv {eCurrentTuple = cur} : outer ->
       case M.lookup (pValue p) cur of
         Nothing ->
           case runReaderT (lookupVariable p) outer of
@@ -510,31 +512,26 @@ lookupVariable p = ReaderT $ \env ->
             Nothing -> pure v
   where
     lookupVariableOnce :: EvalEnvironment -> Maybe (PositionedText, Value)
-    lookupVariableOnce newEnv =
-      case newEnv of
-        TopLevel -> Nothing
-        InsideTuple {eCurrentTuple = cur, eOuterEnvironment = outer} ->
-          case M.lookup (pValue p) cur of
-            Nothing -> lookupVariableOnce outer
-            Just (TupleValueRow p2 v _) -> pure (p2, v)
+    lookupVariableOnce =
+      getFirst
+        . foldMap
+          (\InsideTupleEnv {eCurrentTuple = cur} -> First ((\(TupleValueRow p2 v _) -> (p2, v)) <$> (M.lookup (pValue p) cur)))
 
 evalTupleExprs :: TupleValue -> [PositionedTupleExpr] -> Eval Value
 evalTupleExprs initial updates = do
-  env <- ask
-  newEnv <- foldlM evalTupleExpr (InsideTuple initial mempty env) updates
+  newEnv <- foldlM evalTupleExpr (InsideTupleEnv initial mempty) updates
   pure (TupleValue (M.difference (eCurrentTuple newEnv) (eCurrentTuplePrivates newEnv)))
   where
-    evalTupleExpr :: EvalEnvironment -> PositionedTupleExpr -> Eval EvalEnvironment
-    evalTupleExpr env tp = withReaderT (const env) $
+    evalTupleExpr :: InsideTupleEnv -> PositionedTupleExpr -> Eval InsideTupleEnv
+    evalTupleExpr ite tp = withReaderT (ite :) $
       case pValue tp of
         Row attr label valExpr -> do
           val <- case pValue valExpr of
             ValuedRow rowValue -> Just <$> evalExpr rowValue
             NullRow -> pure Nothing
             AbstractRow -> lift $ Left (AbstractInNonAbstractTuple (void valExpr))
-          case env of
-            TopLevel -> error "evalTupleExpr cannot be called"
-            it@InsideTuple {eCurrentTuple = e, eCurrentTuplePrivates = privates} -> do
+          case ite of
+            InsideTupleEnv {eCurrentTuple = e, eCurrentTuplePrivates = privates} -> do
               let alterer :: Maybe TupleValueRow -> Eval (Maybe TupleValueRow)
                   alterer orig =
                     case (orig, val) of
@@ -550,10 +547,10 @@ evalTupleExprs initial updates = do
               let newPrivates = case attr of
                     Just (Positioned {pValue = RowPrivate}) -> M.insert (pValue label) () privates
                     _ -> privates
-              pure it {eCurrentTuple = newe, eCurrentTuplePrivates = newPrivates}
+              pure InsideTupleEnv {eCurrentTuple = newe, eCurrentTuplePrivates = newPrivates}
         Assertion assertion -> do
           evalAssertion assertion
-          pure env
+          pure ite
 
 getRowFinality :: Maybe (Positioned RowAttribute) -> TupleValueRowFinality
 getRowFinality attr =
@@ -581,16 +578,16 @@ evalAbstractTuple :: AbstractTupleValue -> Eval Value
 -- one scope to look up names. Assertions are accumulated and evaluated at the
 -- very end, regardless of where they appear.
 evalAbstractTuple (AbstractTupleRows fs assertions) = do
+  -- Reorder the fields according to the evaluation order.
   let fieldsOrdered = sortBy (comparing (atprEvalOrder . snd)) (M.toList fs)
-  newEnv <- foldlM evalAbstractTupleField (InsideTuple mempty mempty TopLevel) fieldsOrdered
+  newEnv <- foldlM evalAbstractTupleField (InsideTupleEnv mempty mempty) fieldsOrdered
   -- Currently assertions do not capture anything.
-  forM_ assertions (\assertion -> withReaderT (const newEnv) (evalAssertion assertion))
-  pure (TupleValue (eCurrentTuple newEnv))
+  forM_ assertions (\assertion -> withReaderT (const [newEnv]) (evalAssertion assertion))
+  pure (TupleValue (eCurrentTuple (newEnv)))
   where
-    evalAbstractTupleField :: EvalEnvironment -> (Text, AbstractTupleValueRow) -> Eval EvalEnvironment
-    evalAbstractTupleField TopLevel _ = error "impossible in this context"
-    evalAbstractTupleField it@InsideTuple {..} (k, AbstractTupleValueRow {..}) =
-      let newEnv = it {eOuterEnvironment = atprCapturedEnvironment}
+    evalAbstractTupleField :: InsideTupleEnv -> (Text, AbstractTupleValueRow) -> Eval InsideTupleEnv
+    evalAbstractTupleField it@InsideTupleEnv {..} (k, AbstractTupleValueRow {..}) =
+      let newEnv = it : atprCapturedEnvironment
        in withReaderT (const newEnv) $
             case pValue atprValue of
               NullRow -> pure it
@@ -634,7 +631,7 @@ intoAbstractTupleValueFromExprUpdate initial Positioned {pValue = texprs} captur
 evalQCL :: Text -> Either Text Value
 evalQCL text = do
   parsed <- parseQCL text
-  case runReaderT (evalExpr parsed) TopLevel of
+  case runReaderT (evalExpr parsed) [] of
     Right v -> pure v
     Left e -> Left (printError e)
   where
