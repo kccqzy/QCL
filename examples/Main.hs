@@ -55,13 +55,15 @@ examples =
     "{ a=1, b={ x=2, y=3 } } { b = b { y = y + x + a } }",
     "{ a=1, b={ x=2, y=3 } } { b { y = y + x + a } }",
     "{ x = 1, y = 2, z = { a = x + 1, b = y + a + 2}}.z.b",
-    "{ a=1, b={ a=1, b={ a=1, b={ c=a } } } }",
+    "{ a=1, b=2 } { a=b+1 } { b=a+1 } { a=b+1 } { b=a+1 }",
     "{ final meaningOfLife = 42 } { meaningOfLife = 43 }",
     "{ final\n  meaningOfLife = 42 } { meaningOfLife = null }",
+    "{ final x = null }",
+    "{ private x = null }",
     "{ a = abstract }",
     "{}.eval",
-    "abstract {\n  a = abstract,\n  assert (a % 2 == 0),\n  ret = a / 2,\n}",
-    "abstract {\n  a = abstract,\n  assert (a % 2 == 0),\n  ret = a / 2,\n} { a = 42 }",
+    "# Abstract tuples are not eagerly evaluated.\nabstract {\n  a = abstract,\n  assert (a % 2 == 0),\n  ret = a / 2,\n}",
+    "# Abstract tuple updates are also not eagerly evaluated.\nabstract {\n  a = abstract,\n  assert (a % 2 == 0),\n  ret = a / 2,\n} { a = 42 }",
     "abstract {\n  a = abstract,\n  assert (a % 2 == 0),\n  ret = a / 2,\n} { a = 42 }\n.eval",
     "{\n\
     \  checkEven = abstract {\n\
@@ -79,9 +81,9 @@ examples =
     \  },\n\
     \  e1 = checkEven { a = 105 },\n\
     \} { e1 = e1.eval.ret, checkEven = null }",
-    "{a=1, b=abstract{c=a}.eval, assert (b.c==a)}",
-    "{a=1, b=abstract{c=abstract}}{b=b{c=a}.eval, assert (b.c==a)}",
-    "{a=1, b=abstract{c=abstract}}{a=2, b=b{c=a}.eval, assert (b.c==a)}",
+    "# Variables in abstract tuples can refer to the surrounding scope (lexical scope).\n{a = 1, b = abstract{c = a}.eval, assert (b.c==a)}",
+    "# Variables in abstract tuple updates can also refer to the surrounding scope.\n{a = 1, b = abstract{c = abstract}}{b = b{c = a}.eval, assert (b.c==a)}",
+    "# Variables in abstract tuple updates refer to the value upon the update, not during evaluation.\n{a = 1, b = abstract{c = abstract}}{b {c = a}, a = a + a, b = b.eval, assert (b.c!=a)}",
     "abstract{\n\
     \  a= abstract,\n\
     \  b= abstract{\n\
@@ -90,6 +92,14 @@ examples =
     \  },\n\
     \  ret= a+b{x=a*100}.eval.ret\n\
     \} { a = 5 }.eval.ret",
+    "{assert(1004==abstract{\n\
+    \  a= abstract,\n\
+    \  b= abstract{\n\
+    \    x= abstract,\n\
+    \    ret= x*10\n\
+    \  },\n\
+    \  ret= a+b{x=a*100}.eval.ret\n\
+    \} { a = 5 }.eval.ret)}",
     "# Mutual reference is not allowed\n\
     \abstract { a = abstract, b = a+1 } { a = b+1 } .eval",
     "{a=2, b = abstract { c = abstract, assert (c%a == 0) }} { b = b { c = 10 }.eval }",

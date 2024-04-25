@@ -134,7 +134,7 @@ error:
     variable reference "a" must be inside a tuple
   |
 1 | a+b.c.d
-  | ^ top-level variable
+  | ^ top-level variable reference
 
 ```
 
@@ -309,6 +309,9 @@ error:
   | ^^
 3 | 0), }
   | ^ evaluates to false
+  |
+1 | {x = 5, assert(x % 2
+  |                ^ this has value 5
 
 ```
 
@@ -362,7 +365,7 @@ error:
     variable reference "c" must be inside a tuple
   |
 1 | 1 + { a = 2, b = a + 3}.b && c
-  |                              ^ top-level variable
+  |                              ^ top-level variable reference
 
 ```
 
@@ -402,7 +405,7 @@ error:
     variable reference "c" does not exist
   |
 4 |  c = a + b + c
-  |              ^ undefined variable
+  |              ^ undefined variable reference
 
 ```
 
@@ -448,7 +451,7 @@ error:
     variable reference "a" must be inside a tuple
   |
 1 | a{x=1} {y=+x}
-  | ^ top-level variable
+  | ^ top-level variable reference
 
 ```
 
@@ -466,7 +469,7 @@ error:
     variable reference "a" must be inside a tuple
   |
 1 | a.b.c
-  | ^ top-level variable
+  | ^ top-level variable reference
 
 ```
 
@@ -484,7 +487,7 @@ error:
     variable reference "a" must be inside a tuple
   |
 1 | a.b{x=1}
-  | ^ top-level variable
+  | ^ top-level variable reference
 
 ```
 
@@ -502,7 +505,7 @@ error:
     variable reference "a" must be inside a tuple
   |
 1 | a{x=1}.b
-  | ^ top-level variable
+  | ^ top-level variable reference
 
 ```
 
@@ -664,10 +667,13 @@ error:
     variable reference "x" is ambiguous
   |
 1 | { x=1, y=2, z={x=1, y=x} }
-  |                ^ possible reference
+  |                       ^ variable reference used here
   |
 1 | { x=1, y=2, z={x=1, y=x} }
-  |   ^ another possible reference
+  |                ^ possible referent
+  |
+1 | { x=1, y=2, z={x=1, y=x} }
+  |   ^ another possible referent
 
 ```
 
@@ -718,20 +724,13 @@ JSON result:
 QCL:
 
 ```
-{ a=1, b={ a=1, b={ a=1, b={ c=a } } } }
+{ a=1, b=2 } { a=b+1 } { b=a+1 } { a=b+1 } { b=a+1 }
 ```
 
-Error message:
-```
-error:
-    variable reference "a" is ambiguous
-  |
-1 | { a=1, b={ a=1, b={ a=1, b={ c=a } } } }
-  |                     ^ possible reference
-  |
-1 | { a=1, b={ a=1, b={ a=1, b={ c=a } } } }
-  |            ^ another possible reference
+JSON result:
 
+```
+{"a":5,"b":6}
 ```
 
 ------------
@@ -788,6 +787,42 @@ error:
 QCL:
 
 ```
+{ final x = null }
+```
+
+Error message:
+```
+error:
+    null row cannot be marked final
+  |
+1 | { final x = null }
+  |   ^^^^^ marked as final here
+
+```
+
+------------
+
+QCL:
+
+```
+{ private x = null }
+```
+
+Error message:
+```
+error:
+    null row cannot be marked private
+  |
+1 | { private x = null }
+  |   ^^^^^^^ marked as private here
+
+```
+
+------------
+
+QCL:
+
+```
 { a = abstract }
 ```
 
@@ -824,6 +859,7 @@ error:
 QCL:
 
 ```
+# Abstract tuples are not eagerly evaluated.
 abstract {
   a = abstract,
   assert (a % 2 == 0),
@@ -842,6 +878,7 @@ null
 QCL:
 
 ```
+# Abstract tuple updates are also not eagerly evaluated.
 abstract {
   a = abstract,
   assert (a % 2 == 0),
@@ -917,6 +954,9 @@ error:
   |
 4 |     assert(a % 2 == 0),
   |            ^^^^^^^^^^ evaluates to false
+  |
+4 |     assert(a % 2 == 0),
+  |            ^ this has value 105
 
 ```
 
@@ -925,7 +965,8 @@ error:
 QCL:
 
 ```
-{a=1, b=abstract{c=a}.eval, assert (b.c==a)}
+# Variables in abstract tuples can refer to the surrounding scope (lexical scope).
+{a = 1, b = abstract{c = a}.eval, assert (b.c==a)}
 ```
 
 JSON result:
@@ -939,7 +980,8 @@ JSON result:
 QCL:
 
 ```
-{a=1, b=abstract{c=abstract}}{b=b{c=a}.eval, assert (b.c==a)}
+# Variables in abstract tuple updates can also refer to the surrounding scope.
+{a = 1, b = abstract{c = abstract}}{b = b{c = a}.eval, assert (b.c==a)}
 ```
 
 JSON result:
@@ -953,13 +995,14 @@ JSON result:
 QCL:
 
 ```
-{a=1, b=abstract{c=abstract}}{a=2, b=b{c=a}.eval, assert (b.c==a)}
+# Variables in abstract tuple updates refer to the value upon the update, not during evaluation.
+{a = 1, b = abstract{c = abstract}}{b {c = a}, a = a + a, b = b.eval, assert (b.c!=a)}
 ```
 
 JSON result:
 
 ```
-{"a":2,"b":{"c":2}}
+{"a":2,"b":{"c":1}}
 ```
 
 ------------
@@ -988,6 +1031,51 @@ JSON result:
 QCL:
 
 ```
+{assert(1004==abstract{
+  a= abstract,
+  b= abstract{
+    x= abstract,
+    ret= x*10
+  },
+  ret= a+b{x=a*100}.eval.ret
+} { a = 5 }.eval.ret)}
+```
+
+Error message:
+```
+error:
+    assertion failed
+  |
+1 | {assert(1004==abstract{
+  |         ^^^^^^^^^^^^^^^
+2 |   a= abstract,
+  | ^^^^^^^^^^^^^^
+3 |   b= abstract{
+  | ^^^^^^^^^^^^^^
+4 |     x= abstract,
+  | ^^^^^^^^^^^^^^^^
+5 |     ret= x*10
+  | ^^^^^^^^^^^^^
+6 |   },
+  | ^^^^
+7 |   ret= a+b{x=a*100}.eval.ret
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+8 | } { a = 5 }.eval.ret)}
+  | ^^^^^^^^^^^^^^^^^^^^ evaluates to false
+  |
+8 | } { a = 5 }.eval.ret)}
+  |                  ^^^ this has value 5005
+  |
+8 | } { a = 5 }.eval.ret)}
+  |             ^^^^ this has value {"a":5,"b":null,"ret":5005}
+
+```
+
+------------
+
+QCL:
+
+```
 # Mutual reference is not allowed
 abstract { a = abstract, b = a+1 } { a = b+1 } .eval
 ```
@@ -998,7 +1086,7 @@ error:
     variable reference "b" does not exist
   |
 2 | abstract { a = abstract, b = a+1 } { a = b+1 } .eval
-  |                                          ^ undefined variable
+  |                                          ^ undefined variable reference
 
 ```
 
@@ -1031,6 +1119,12 @@ error:
   |
 1 | {a=2, b = abstract { c = abstract, assert (c%a == 0) }} { b = b { c = 11 }.eval }
   |                                            ^^^^^^^^ evaluates to false
+  |
+1 | {a=2, b = abstract { c = abstract, assert (c%a == 0) }} { b = b { c = 11 }.eval }
+  |                                              ^ this has value 2
+  |
+1 | {a=2, b = abstract { c = abstract, assert (c%a == 0) }} { b = b { c = 11 }.eval }
+  |                                            ^ this has value 11
 
 ```
 
