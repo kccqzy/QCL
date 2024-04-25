@@ -1003,3 +1003,35 @@ error:
 ```
 
 ------------
+
+QCL:
+
+```
+{a=2, b = abstract { c = abstract, assert (c%a == 0) }} { b = b { c = 10 }.eval }
+```
+
+JSON result:
+
+```
+{"a":2,"b":{"c":10}}
+```
+
+------------
+
+QCL:
+
+```
+{a=2, b = abstract { c = abstract, assert (c%a == 0) }} { b = b { c = 11 }.eval }
+```
+
+Error message:
+```
+error:
+    assertion failed
+  |
+1 | {a=2, b = abstract { c = abstract, assert (c%a == 0) }} { b = b { c = 11 }.eval }
+  |                                            ^^^^^^^^ evaluates to false
+
+```
+
+------------

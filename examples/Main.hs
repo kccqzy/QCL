@@ -91,7 +91,9 @@ examples =
     \  ret= a+b{x=a*100}.eval.ret\n\
     \} { a = 5 }.eval.ret",
     "# Mutual reference is not allowed\n\
-    \abstract { a = abstract, b = a+1 } { a = b+1 } .eval"
+    \abstract { a = abstract, b = a+1 } { a = b+1 } .eval",
+    "{a=2, b = abstract { c = abstract, assert (c%a == 0) }} { b = b { c = 10 }.eval }",
+    "{a=2, b = abstract { c = abstract, assert (c%a == 0) }} { b = b { c = 11 }.eval }"
   ]
 
 main :: IO ()

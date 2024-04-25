@@ -372,13 +372,21 @@ data AbstractTupleValueRow
   }
   deriving (Show)
 
+data AbstractTupleValueAssertion
+  = AbstractTupleValueAssertion
+  { atpaExpr :: PositionedExpr,
+    atpaEvalOrder :: Int,
+    atpaCapturedEnvironment :: EvalEnvironment
+  }
+  deriving (Show)
+
 newtype TupleValueRowFinality = TupleValueRowFinality (Maybe (Positioned ()))
   deriving (Show)
 
 data AbstractTupleValue
   = AbstractTupleRows
   { atvFields :: M.Map Text AbstractTupleValueRow,
-    atvAssertions :: [PositionedExpr]
+    atvAssertions :: [AbstractTupleValueAssertion]
   }
   deriving (Show)
 
@@ -578,15 +586,12 @@ evalAbstractTuple :: AbstractTupleValue -> Eval Value
 -- one scope to look up names. Assertions are accumulated and evaluated at the
 -- very end, regardless of where they appear.
 evalAbstractTuple (AbstractTupleRows fs assertions) = do
-  -- Reorder the fields according to the evaluation order.
-  let fieldsOrdered = sortBy (comparing (atprEvalOrder . snd)) (M.toList fs)
-  newEnv <- foldlM evalAbstractTupleField (InsideTupleEnv mempty mempty) fieldsOrdered
-  -- Currently assertions do not capture anything.
-  forM_ assertions (\assertion -> withReaderT (const [newEnv]) (evalAssertion assertion))
-  pure (TupleValue (eCurrentTuple (newEnv)))
+  newEnv <- foldlM evalAbstractTupleField (InsideTupleEnv mempty mempty) orderedFieldsAndAssertions
+  -- forM_ assertions (\assertion -> withReaderT (const [newEnv]) (evalAssertion assertion))
+  pure (TupleValue (eCurrentTuple newEnv))
   where
-    evalAbstractTupleField :: InsideTupleEnv -> (Text, AbstractTupleValueRow) -> Eval InsideTupleEnv
-    evalAbstractTupleField it@InsideTupleEnv {..} (k, AbstractTupleValueRow {..}) =
+    evalAbstractTupleField :: InsideTupleEnv -> Either AbstractTupleValueRow AbstractTupleValueAssertion -> Eval InsideTupleEnv
+    evalAbstractTupleField it@InsideTupleEnv {..} (Left AbstractTupleValueRow {..}) =
       let newEnv = it : atprCapturedEnvironment
        in withReaderT (const newEnv) $
             case pValue atprValue of
@@ -595,7 +600,14 @@ evalAbstractTuple (AbstractTupleRows fs assertions) = do
               ValuedRow pexpr -> do
                 -- TODO handle null fields more intelligently by changing the error message
                 val <- evalExpr pexpr
-                pure it {eCurrentTuple = M.insert k (TupleValueRow atprDefinitionLoc val atprFinality) eCurrentTuple}
+                pure it {eCurrentTuple = M.insert (pValue atprDefinitionLoc) (TupleValueRow atprDefinitionLoc val atprFinality) eCurrentTuple}
+    evalAbstractTupleField it (Right AbstractTupleValueAssertion {..}) =
+      let newEnv = it : atpaCapturedEnvironment
+       in withReaderT (const newEnv) (evalAssertion atpaExpr) >> pure it
+
+    -- Reorder the fields and assertions according to the evaluation order.
+    orderedFieldsAndAssertions :: [Either AbstractTupleValueRow AbstractTupleValueAssertion]
+    orderedFieldsAndAssertions = sortBy (comparing (either atprEvalOrder atpaEvalOrder)) ((Left <$> M.elems fs) ++ (Right <$> assertions))
 
 intoAbstractTupleValueFromExpr :: Positioned [PositionedTupleExpr] -> EvalEnvironment -> Either EvalError AbstractTupleValue
 intoAbstractTupleValueFromExpr = intoAbstractTupleValueFromExprUpdate (AbstractTupleRows mempty mempty)
@@ -608,8 +620,17 @@ intoAbstractTupleValueFromExprUpdate initial Positioned {pValue = texprs} captur
     initialEvaluationOrder = 1 + (max 0 (getMax (foldMap (\row -> Max (atprEvalOrder row)) (atvFields initial))))
 
     processTupleExpr :: AbstractTupleValue -> (Int, PositionedTupleExpr) -> Either EvalError AbstractTupleValue
-    processTupleExpr atv@AbstractTupleRows {atvAssertions = as} (_, Positioned {pValue = Assertion a}) =
-      pure atv {atvAssertions = a : as}
+    processTupleExpr atv@AbstractTupleRows {atvAssertions = as} (order, Positioned {pValue = Assertion a}) =
+      pure
+        atv
+          { atvAssertions =
+              AbstractTupleValueAssertion
+                { atpaExpr = a,
+                  atpaEvalOrder = order,
+                  atpaCapturedEnvironment = capturedEnvironment
+                }
+                : as
+          }
     processTupleExpr _ (_, Positioned {pValue = Row (Just (pos@Positioned {pValue = RowPrivate})) _ _}) =
       Left (PrivateFieldInAbstractTuple (void pos))
     processTupleExpr atv@AbstractTupleRows {atvFields = fs} (order, Positioned {pValue = Row attr label rowExpr}) = do
