@@ -6,6 +6,7 @@
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StrictData #-}
+{-# LANGUAGE TupleSections #-}
 
 module QCL (Value, evalQCL) where
 
@@ -77,12 +78,12 @@ data RowAttribute = RowFinal | RowPrivate
   deriving (Show)
 
 data TupleExpr
-  = Row (Maybe (Positioned RowAttribute)) PositionedText PositionedRowExpr
+  = Row PositionedText PositionedRowExpr
   | Assertion PositionedExpr
   deriving (Show)
 
 data RowExpr
-  = ValuedRow PositionedExpr
+  = ValuedRow (Maybe (Positioned RowAttribute)) PositionedExpr
   | DeleteRow
   | AbstractRow
   deriving (Show)
@@ -278,39 +279,30 @@ expr = mdo
         <|> do
           attr <- pure Nothing <|> (Just <$> (RowFinal <$$ lit "final")) <|> (Just <$> (RowPrivate <$$ lit "private"))
           k <- E.terminal identifier E.<?> "identifier"
-          let assignedValue = const <$> (lit "=" *> tupleRowValue)
+          let assignedValue = const <$> (lit "=" *> val)
           let updateSyntaxSugar =
                 -- Syntax sugar to perform a tuple update without the = token. Due to
                 -- ApplicativeDo desugaring limitations we cannot use the identifier
                 -- directly so we have to parse into a function that accepts it.
                 ( \updates parsedIdentifier ->
-                    fromPosition2
-                      parsedIdentifier
+                    withPosition2
+                      TupleUpdate
+                      (Var parsedIdentifier <$ parsedIdentifier)
                       updates
-                      ( ValuedRow
-                          ( withPosition2
-                              TupleUpdate
-                              (Var parsedIdentifier <$ parsedIdentifier)
-                              updates
-                          )
-                      )
                 )
                   <$> between (lit "{") (lit "}") tupleContents
           vf <- assignedValue <|> updateSyntaxSugar
-          pure (let v = vf k in fromPosition2 k v (Row attr k v))
-
-  let valuedRow pe = ValuedRow pe <$ pe
-  let tupleRowValue = (valuedRow <$> val)
+          pure (let v = vf k in fromPosition2 k v (Row k (ValuedRow attr v <$ v)))
 
   tupleAbstractRow :: E.Prod r Text PositionedText PositionedTupleExpr <- E.rule $ do
     abstract <- lit "abstract"
     k <- E.terminal identifier E.<?> "identifier"
-    pure (fromPosition2 abstract k (Row Nothing k (AbstractRow <$ abstract)))
+    pure (fromPosition2 abstract k (Row k (AbstractRow <$ abstract)))
 
   tupleDeleteRow :: E.Prod r Text PositionedText PositionedTupleExpr <- E.rule $ do
     abstract <- lit "delete"
     k <- E.terminal identifier E.<?> "identifier"
-    pure (fromPosition2 abstract k (Row Nothing k (DeleteRow <$ abstract)))
+    pure (fromPosition2 abstract k (Row k (DeleteRow <$ abstract)))
 
   tupleAssertion <- E.rule $ do
     l <- lit "assert"
@@ -383,7 +375,6 @@ data AbstractTupleValueRow
   { atprDefinitionLoc :: PositionedText,
     atprValue :: PositionedRowExpr,
     atprEvalOrder :: Int,
-    atprFinality :: TupleValueRowFinality,
     atprCapturedEnvironment :: EvalEnvironment
   }
   deriving (Show)
@@ -431,7 +422,6 @@ data EvalError
     FinalRowOverrideError PositionedText PositionedText (Positioned ())
   | -- | Making a field abstract when not inside an abstract tuple.
     AbstractInNonAbstractTuple (Positioned ())
-  | DeleteRowWithAttr (Positioned RowAttribute)
   | AbstractFieldNotOverridden (Positioned ())
   | PrivateFieldInAbstractTuple (Positioned ())
   deriving (Show)
@@ -498,14 +488,14 @@ evalExpr pexpr =
     Tuple tupleExprs -> evalTupleExprs M.empty tupleExprs
     AbstractTuple p -> do
       capturedEnvironment <- ask
-      lift $ (AbstractTupleValue <$> intoAbstractTupleValueFromExpr p capturedEnvironment)
+      lift $ (AbstractTupleValue <$> intoAbstractTupleValueFromExpr (pValue p) capturedEnvironment)
     TupleUpdate origVal updates -> do
       orig <- evalExpr origVal
       case orig of
         TupleValue t -> evalTupleExprs t (pValue updates)
         AbstractTupleValue t -> do
           capturedEnvironment <- ask
-          lift $ (AbstractTupleValue <$> intoAbstractTupleValueFromExprUpdate t updates capturedEnvironment)
+          lift $ (AbstractTupleValue <$> intoAbstractTupleValueFromExprUpdate t (pValue updates) capturedEnvironment)
         _ -> lift $ Left (TypeError origVal ExpectTuple)
     Member tuple label -> do
       tupleVal <- evalExpr tuple
@@ -550,12 +540,10 @@ evalTupleExprs initial updates = do
     evalTupleExpr :: InsideTupleEnv -> PositionedTupleExpr -> Eval InsideTupleEnv
     evalTupleExpr ite tp = withReaderT (ite :) $
       case pValue tp of
-        Row attr label valExpr -> do
+        Row label valExpr -> do
           val <- case pValue valExpr of
-            ValuedRow rowValue -> Just <$> evalExpr rowValue
-            DeleteRow -> case attr of
-              Nothing -> pure Nothing
-              Just ra -> lift $ Left (DeleteRowWithAttr ra)
+            ValuedRow attr rowValue -> Just . (attr,) <$> evalExpr rowValue
+            DeleteRow -> pure Nothing
             AbstractRow -> lift $ Left (AbstractInNonAbstractTuple (void valExpr))
           case ite of
             InsideTupleEnv {eCurrentTuple = e, eCurrentTuplePrivates = privates} -> do
@@ -569,10 +557,10 @@ evalTupleExprs initial updates = do
                       (Just (TupleValueRow prevLabel _ _), Just _)
                         | M.notMember (pValue label) initial ->
                             lift $ Left (DuplicateLabelError label prevLabel)
-                      (_, Just v) -> pure (Just (TupleValueRow label v (getRowFinality attr)))
+                      (_, Just (attr, v)) -> pure (Just (TupleValueRow label v (getRowFinality attr)))
               newe <- M.alterF alterer (pValue label) e
-              let newPrivates = case attr of
-                    Just (Positioned {pValue = RowPrivate}) -> M.insert (pValue label) () privates
+              let newPrivates = case val of
+                    Just (Just (Positioned {pValue = RowPrivate}), _) -> M.insert (pValue label) () privates
                     _ -> privates
               pure InsideTupleEnv {eCurrentTuple = newe, eCurrentTuplePrivates = newPrivates}
         Assertion assertion -> do
@@ -654,9 +642,9 @@ evalAbstractTuple (AbstractTupleRows fs assertions) = do
             case pValue atprValue of
               DeleteRow -> pure it
               AbstractRow -> lift $ Left (AbstractFieldNotOverridden (void atprValue))
-              ValuedRow pexpr -> do
+              ValuedRow attr pexpr -> do
                 val <- evalExpr pexpr
-                pure it {eCurrentTuple = M.insert (pValue atprDefinitionLoc) (TupleValueRow atprDefinitionLoc val atprFinality) eCurrentTuple}
+                pure it {eCurrentTuple = M.insert (pValue atprDefinitionLoc) (TupleValueRow atprDefinitionLoc val (getRowFinality attr)) eCurrentTuple}
     evalAbstractTupleField it (Right AbstractTupleValueAssertion {..}) =
       let newEnv = it : atpaCapturedEnvironment
        in withReaderT (const newEnv) (evalAssertion atpaExpr) >> pure it
@@ -665,18 +653,18 @@ evalAbstractTuple (AbstractTupleRows fs assertions) = do
     orderedFieldsAndAssertions :: [Either AbstractTupleValueRow AbstractTupleValueAssertion]
     orderedFieldsAndAssertions = sortBy (comparing (either atprEvalOrder atpaEvalOrder)) ((Left <$> M.elems fs) ++ (Right <$> assertions))
 
-intoAbstractTupleValueFromExpr :: Positioned [PositionedTupleExpr] -> EvalEnvironment -> Either EvalError AbstractTupleValue
+intoAbstractTupleValueFromExpr :: [PositionedTupleExpr] -> EvalEnvironment -> Either EvalError AbstractTupleValue
 intoAbstractTupleValueFromExpr = intoAbstractTupleValueFromExprUpdate (AbstractTupleRows mempty mempty)
 
-intoAbstractTupleValueFromExprUpdate :: AbstractTupleValue -> Positioned [PositionedTupleExpr] -> EvalEnvironment -> Either EvalError AbstractTupleValue
-intoAbstractTupleValueFromExprUpdate initial Positioned {pValue = texprs} capturedEnvironment =
+intoAbstractTupleValueFromExprUpdate :: AbstractTupleValue -> [PositionedTupleExpr] -> EvalEnvironment -> Either EvalError AbstractTupleValue
+intoAbstractTupleValueFromExprUpdate initial texprs capturedEnvironment =
   foldlM processTupleExpr initial (zip [initialEvaluationOrder ..] texprs)
   where
     initialEvaluationOrder :: Int
     initialEvaluationOrder = 1 + (max 0 (getMax (foldMap (\row -> Max (atprEvalOrder row)) (atvFields initial))))
 
     processTupleExpr :: AbstractTupleValue -> (Int, PositionedTupleExpr) -> Either EvalError AbstractTupleValue
-    processTupleExpr atv@AbstractTupleRows {atvAssertions = as} (order, Positioned {pValue = Assertion a}) =
+    processTupleExpr atv@AbstractTupleRows {..} (order, Positioned {pValue = Assertion a}) =
       pure
         atv
           { atvAssertions =
@@ -685,23 +673,37 @@ intoAbstractTupleValueFromExprUpdate initial Positioned {pValue = texprs} captur
                   atpaEvalOrder = order,
                   atpaCapturedEnvironment = capturedEnvironment
                 }
-                : as
+                : atvAssertions
           }
-    processTupleExpr _ (_, Positioned {pValue = Row (Just (pos@Positioned {pValue = RowPrivate})) _ _}) =
+    processTupleExpr _ (_, Positioned {pValue = Row _ (Positioned {pValue = ValuedRow (Just (pos@Positioned {pValue = RowPrivate})) _})}) =
       Left (PrivateFieldInAbstractTuple (void pos))
-    processTupleExpr _ (_, Positioned {pValue = Row (Just ra) _ (Positioned {pValue = DeleteRow})}) =
-      Left (DeleteRowWithAttr ra)
-    processTupleExpr atv@AbstractTupleRows {atvFields = fs} (order, Positioned {pValue = Row attr label rowExpr}) = do
-      let newValue = AbstractTupleValueRow {atprDefinitionLoc = label, atprValue = rowExpr, atprEvalOrder = order, atprFinality = getRowFinality attr, atprCapturedEnvironment = capturedEnvironment}
+    processTupleExpr atv@AbstractTupleRows {atvFields = fs} (order, Positioned {pValue = Row label rowExpr}) = do
+      let newValue =
+            AbstractTupleValueRow
+              { atprDefinitionLoc = label,
+                atprValue = rowExpr,
+                atprEvalOrder = order,
+                atprCapturedEnvironment = capturedEnvironment
+              }
           alterer :: Maybe AbstractTupleValueRow -> Either EvalError (Maybe AbstractTupleValueRow)
           alterer orig = case orig of
-            Just (AbstractTupleValueRow {atprDefinitionLoc = prevDef, atprFinality = TupleValueRowFinality (Just finalPos)}) ->
-              Left (FinalRowOverrideError label prevDef finalPos)
+            Just
+              ( AbstractTupleValueRow
+                  { atprDefinitionLoc = prevDef,
+                    atprValue = Positioned {pValue = ValuedRow (Just finalPos@Positioned {pValue = RowFinal}) _}
+                  }
+                ) ->
+                Left (FinalRowOverrideError label prevDef (void finalPos))
             Just (AbstractTupleValueRow {atprDefinitionLoc = prevLabel})
               | M.notMember (pValue label) (atvFields initial) ->
                   Left (DuplicateLabelError label prevLabel)
-            Just (AbstractTupleValueRow {atprEvalOrder = oldOrder, atprValue = Positioned {pValue = AbstractRow}}) ->
-              pure (Just (newValue {atprEvalOrder = oldOrder}))
+            Just
+              ( AbstractTupleValueRow
+                  { atprEvalOrder = oldOrder,
+                    atprValue = Positioned {pValue = AbstractRow}
+                  }
+                ) ->
+                pure (Just newValue {atprEvalOrder = oldOrder})
             _ ->
               pure (Just newValue)
       newFields <- M.alterF alterer (pValue label) fs
@@ -738,8 +740,6 @@ evalQCL text = do
             "field marked as final cannot be overridden\n" <> explainContext override "override here" <> explainContext def "defined here" <> explainContext final "marked as final here"
           AbstractInNonAbstractTuple abstract ->
             "abstract field cannot be used in non-abstract tuples\n" <> explainContext abstract "abstract field"
-          DeleteRowWithAttr attr ->
-            "explicitly deleted row cannot be marked " <> explainAttr attr <> "\n" <> explainContext attr ("marked as " <> explainAttr attr <> " here")
           AbstractFieldNotOverridden abstract ->
             "abstract field never overridden upon evaluation\n" <> explainContext abstract "abstract field"
           PrivateFieldInAbstractTuple private ->
@@ -748,8 +748,6 @@ evalQCL text = do
             -- require a bit more refactoring in order to implement it.
             "private fields cannot be used in abstract tuples\n" <> explainContext private "private here"
         escapedText (Positioned {pValue = t}) = T.pack (show t)
-        explainAttr Positioned {pValue = RowFinal} = "final"
-        explainAttr Positioned {pValue = RowPrivate} = "private"
         explainExpectedType detail = case detail of
           ExpectBoolean -> "boolean"
           ExpectNumberOrBoolean -> "number or boolean"
