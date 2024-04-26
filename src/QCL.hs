@@ -83,7 +83,7 @@ data TupleExpr
 
 data RowExpr
   = ValuedRow PositionedExpr
-  | NullRow
+  | DeleteRow
   | AbstractRow
   deriving (Show)
 
@@ -120,7 +120,7 @@ multiCharPunct :: [Text]
 multiCharPunct = ["&&", "||", "==", "!=", "<=", ">=", "//"]
 
 reservedWords :: [Text]
-reservedWords = ["true", "false", "assert", "null", "private", "final", "abstract", "eval"]
+reservedWords = ["true", "false", "assert", "delete", "private", "final", "abstract", "eval"]
 
 identifier :: PositionedText -> Maybe PositionedText
 identifier pt = do
@@ -271,32 +271,46 @@ expr = mdo
 
   tupleItem <- E.rule $ tupleRow <|> tupleAssertion
 
-  tupleRow :: E.Prod r Text PositionedText PositionedTupleExpr <- E.rule $ do
-    attr <- pure Nothing <|> (Just <$> (RowFinal <$$ lit "final")) <|> (Just <$> (RowPrivate <$$ lit "private"))
-    k <- E.terminal identifier E.<?> "identifier"
-    let assignedValue = const <$> (lit "=" *> tupleRowValue)
-    let updateSyntaxSugar =
-          -- Syntax sugar to perform a tuple update without the = token. Due to
-          -- ApplicativeDo desugaring limitations we cannot use the identifier
-          -- directly so we have to parse into a function that accepts it.
-          ( \updates parsedIdentifier ->
-              fromPosition2
-                parsedIdentifier
-                updates
-                ( ValuedRow
-                    ( withPosition2
-                        TupleUpdate
-                        (Var parsedIdentifier <$ parsedIdentifier)
-                        updates
-                    )
+  tupleRow :: E.Prod r Text PositionedText PositionedTupleExpr <-
+    E.rule $
+      tupleDeleteRow
+        <|> tupleAbstractRow
+        <|> do
+          attr <- pure Nothing <|> (Just <$> (RowFinal <$$ lit "final")) <|> (Just <$> (RowPrivate <$$ lit "private"))
+          k <- E.terminal identifier E.<?> "identifier"
+          let assignedValue = const <$> (lit "=" *> tupleRowValue)
+          let updateSyntaxSugar =
+                -- Syntax sugar to perform a tuple update without the = token. Due to
+                -- ApplicativeDo desugaring limitations we cannot use the identifier
+                -- directly so we have to parse into a function that accepts it.
+                ( \updates parsedIdentifier ->
+                    fromPosition2
+                      parsedIdentifier
+                      updates
+                      ( ValuedRow
+                          ( withPosition2
+                              TupleUpdate
+                              (Var parsedIdentifier <$ parsedIdentifier)
+                              updates
+                          )
+                      )
                 )
-          )
-            <$> between (lit "{") (lit "}") tupleContents
-    vf <- assignedValue <|> updateSyntaxSugar
-    pure (let v = vf k in fromPosition2 k v (Row attr k v))
+                  <$> between (lit "{") (lit "}") tupleContents
+          vf <- assignedValue <|> updateSyntaxSugar
+          pure (let v = vf k in fromPosition2 k v (Row attr k v))
 
   let valuedRow pe = ValuedRow pe <$ pe
-  tupleRowValue :: E.Prod r Text PositionedText PositionedRowExpr <- E.rule $ (NullRow <$$ lit "null") <|> (AbstractRow <$$ lit "abstract") <|> (valuedRow <$> val)
+  let tupleRowValue = (valuedRow <$> val)
+
+  tupleAbstractRow :: E.Prod r Text PositionedText PositionedTupleExpr <- E.rule $ do
+    abstract <- lit "abstract"
+    k <- E.terminal identifier E.<?> "identifier"
+    pure (fromPosition2 abstract k (Row Nothing k (AbstractRow <$ abstract)))
+
+  tupleDeleteRow :: E.Prod r Text PositionedText PositionedTupleExpr <- E.rule $ do
+    abstract <- lit "delete"
+    k <- E.terminal identifier E.<?> "identifier"
+    pure (fromPosition2 abstract k (Row Nothing k (DeleteRow <$ abstract)))
 
   tupleAssertion <- E.rule $ do
     l <- lit "assert"
@@ -417,7 +431,7 @@ data EvalError
     FinalRowOverrideError PositionedText PositionedText (Positioned ())
   | -- | Making a field abstract when not inside an abstract tuple.
     AbstractInNonAbstractTuple (Positioned ())
-  | NullRowWithAttr (Positioned RowAttribute)
+  | DeleteRowWithAttr (Positioned RowAttribute)
   | AbstractFieldNotOverridden (Positioned ())
   | PrivateFieldInAbstractTuple (Positioned ())
   deriving (Show)
@@ -539,9 +553,9 @@ evalTupleExprs initial updates = do
         Row attr label valExpr -> do
           val <- case pValue valExpr of
             ValuedRow rowValue -> Just <$> evalExpr rowValue
-            NullRow -> case attr of
+            DeleteRow -> case attr of
               Nothing -> pure Nothing
-              Just ra -> lift $ Left (NullRowWithAttr ra)
+              Just ra -> lift $ Left (DeleteRowWithAttr ra)
             AbstractRow -> lift $ Left (AbstractInNonAbstractTuple (void valExpr))
           case ite of
             InsideTupleEnv {eCurrentTuple = e, eCurrentTuplePrivates = privates} -> do
@@ -638,7 +652,7 @@ evalAbstractTuple (AbstractTupleRows fs assertions) = do
       let newEnv = it : atprCapturedEnvironment
        in withReaderT (const newEnv) $
             case pValue atprValue of
-              NullRow -> pure it
+              DeleteRow -> pure it
               AbstractRow -> lift $ Left (AbstractFieldNotOverridden (void atprValue))
               ValuedRow pexpr -> do
                 val <- evalExpr pexpr
@@ -675,8 +689,8 @@ intoAbstractTupleValueFromExprUpdate initial Positioned {pValue = texprs} captur
           }
     processTupleExpr _ (_, Positioned {pValue = Row (Just (pos@Positioned {pValue = RowPrivate})) _ _}) =
       Left (PrivateFieldInAbstractTuple (void pos))
-    processTupleExpr _ (_, Positioned {pValue = Row (Just ra) _ (Positioned {pValue = NullRow})}) =
-      Left (NullRowWithAttr ra)
+    processTupleExpr _ (_, Positioned {pValue = Row (Just ra) _ (Positioned {pValue = DeleteRow})}) =
+      Left (DeleteRowWithAttr ra)
     processTupleExpr atv@AbstractTupleRows {atvFields = fs} (order, Positioned {pValue = Row attr label rowExpr}) = do
       let newValue = AbstractTupleValueRow {atprDefinitionLoc = label, atprValue = rowExpr, atprEvalOrder = order, atprFinality = getRowFinality attr, atprCapturedEnvironment = capturedEnvironment}
           alterer :: Maybe AbstractTupleValueRow -> Either EvalError (Maybe AbstractTupleValueRow)
@@ -724,8 +738,8 @@ evalQCL text = do
             "field marked as final cannot be overridden\n" <> explainContext override "override here" <> explainContext def "defined here" <> explainContext final "marked as final here"
           AbstractInNonAbstractTuple abstract ->
             "abstract field cannot be used in non-abstract tuples\n" <> explainContext abstract "abstract field"
-          NullRowWithAttr attr ->
-            "null row cannot be marked " <> explainAttr attr <> "\n" <> explainContext attr ("marked as " <> explainAttr attr <> " here")
+          DeleteRowWithAttr attr ->
+            "explicitly deleted row cannot be marked " <> explainAttr attr <> "\n" <> explainContext attr ("marked as " <> explainAttr attr <> " here")
           AbstractFieldNotOverridden abstract ->
             "abstract field never overridden upon evaluation\n" <> explainContext abstract "abstract field"
           PrivateFieldInAbstractTuple private ->

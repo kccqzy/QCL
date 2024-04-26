@@ -45,7 +45,7 @@ examples =
     "{a = {b = {c=1}}, ret = a{x=1}.b}.ret",
     "{ x=1, y=2, z=3 } {z = 4}",
     "{ x=1, y=2, z=3 } {z = 4 + z}",
-    "{ x=1, y=2, z=3 } {z = null}",
+    "{ x=1, y=2, z=3 } {delete z}",
     "{ x=1, y=2, z=3 } .x",
     "{ x=1, y=2, z=3 }.wwww",
     "{ x=1, y=2, z=y } ",
@@ -57,53 +57,54 @@ examples =
     "{ x = 1, y = 2, z = { a = x + 1, b = y + a + 2}}.z.b",
     "{ a=1, b=2 } { a=b+1 } { b=a+1 } { a=b+1 } { b=a+1 }",
     "{ final meaningOfLife = 42 } { meaningOfLife = 43 }",
-    "{ final\n  meaningOfLife = 42 } { meaningOfLife = null }",
-    "{ final x = null }",
-    "{ private x = null }",
-    "{ a = abstract }",
+    "{ final\n  meaningOfLife = 42 } { delete meaningOfLife }",
+    "{ abstract a }",
     "{}.eval",
-    "# Abstract tuples are not eagerly evaluated.\nabstract {\n  a = abstract,\n  assert (a % 2 == 0),\n  ret = a / 2,\n}",
-    "# Abstract tuple updates are also not eagerly evaluated.\nabstract {\n  a = abstract,\n  assert (a % 2 == 0),\n  ret = a / 2,\n} { a = 42 }",
-    "abstract {\n  a = abstract,\n  assert (a % 2 == 0),\n  ret = a / 2,\n} { a = 42 }\n.eval",
+    "# Abstract tuples are not eagerly evaluated.\nabstract {\n  abstract a,\n  assert (a % 2 == 0),\n  ret = a / 2,\n}",
+    "# Abstract tuple updates are also not eagerly evaluated.\nabstract {\n  abstract a,\n  assert (a % 2 == 0),\n  ret = a / 2,\n} { a = 42 }",
+    "abstract {\n  abstract a,\n  assert (a % 2 == 0),\n  ret = a / 2,\n} { a = 42 }\n.eval",
     "{\n\
     \  checkEven = abstract {\n\
-    \    a = abstract,\n\
+    \    abstract a,\n\
     \    assert(a % 2 == 0),\n\
     \    ret = a / 2,\n\
     \  },\n\
     \  e1 = checkEven { a = 100 },\n\
-    \} { e1 = e1.eval.ret, checkEven = null }",
+    \} { e1 = e1.eval.ret, delete checkEven }",
     "{\n\
     \  checkEven = abstract {\n\
-    \    a = abstract,\n\
+    \    abstract a,\n\
     \    assert(a % 2 == 0),\n\
     \    ret = a / 2,\n\
     \  },\n\
     \  e1 = checkEven { a = 105 },\n\
-    \} { e1 = e1.eval.ret, checkEven = null }",
-    "# Variables in abstract tuples can refer to the surrounding scope (lexical scope).\n{a = 1, b = abstract{c = a}.eval, assert (b.c==a)}",
-    "# Variables in abstract tuple updates can also refer to the surrounding scope.\n{a = 1, b = abstract{c = abstract}}{b = b{c = a}.eval, assert (b.c==a)}",
-    "# Variables in abstract tuple updates refer to the value upon the update, not during evaluation.\n{a = 1, b = abstract{c = abstract}}{b {c = a}, a = a + a, b = b.eval, assert (b.c!=a)}",
+    \} { e1 = e1.eval.ret, delete checkEven }",
+    "# Variables in abstract tuples can refer to the surrounding scope (lexical scope).\n\
+    \{a = 1, b = abstract{c = a}.eval, assert (b.c==a)}",
+    "# Variables in abstract tuple updates can also refer to the surrounding scope.\n\
+    \{a = 1, b = abstract{abstract c}}{b = b{c = a}.eval, assert (b.c==a)}",
+    "# Variables in abstract tuple updates refer to the value upon the update, not during evaluation.\n\
+    \{a = 1, b = abstract{abstract c}}{b {c = a}, a = a + a, b = b.eval, assert (b.c!=a)}",
     "abstract{\n\
-    \  a= abstract,\n\
+    \  abstract a,\n\
     \  b= abstract{\n\
-    \    x= abstract,\n\
+    \    abstract x,\n\
     \    ret= x*10\n\
     \  },\n\
     \  ret= a+b{x=a*100}.eval.ret\n\
     \} { a = 5 }.eval.ret",
     "{assert(1004==abstract{\n\
-    \  a= abstract,\n\
+    \  abstract a,\n\
     \  b= abstract{\n\
-    \    x= abstract,\n\
+    \    abstract x,\n\
     \    ret= x*10\n\
     \  },\n\
     \  ret= a+b{x=a*100}.eval.ret\n\
     \} { a = 5 }.eval.ret)}",
     "# Mutual reference is not allowed\n\
-    \abstract { a = abstract, b = a+1 } { a = b+1 } .eval",
-    "{a=2, b = abstract { c = abstract, assert (c%a == 0) }} { b = b { c = 10 }.eval }",
-    "{a=2, b = abstract { c = abstract, assert (c%a == 0) }} { b = b { c = 11 }.eval }"
+    \abstract { abstract a, b = a+1 } { a = b+1 } .eval",
+    "{a=2, b = abstract { abstract c, assert (c%a == 0) }} { b = b { c = 10 }.eval }",
+    "{a=2, b = abstract { abstract c, assert (c%a == 0) }} { b = b { c = 11 }.eval }"
   ]
 
 main :: IO ()

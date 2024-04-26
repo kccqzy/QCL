@@ -570,7 +570,7 @@ JSON result:
 QCL:
 
 ```
-{ x=1, y=2, z=3 } {z = null}
+{ x=1, y=2, z=3 } {delete z}
 ```
 
 JSON result:
@@ -763,7 +763,7 @@ QCL:
 
 ```
 { final
-  meaningOfLife = 42 } { meaningOfLife = null }
+  meaningOfLife = 42 } { delete meaningOfLife }
 ```
 
 Error message:
@@ -771,10 +771,10 @@ Error message:
 error:
     field marked as final cannot be overridden
   |
-2 |   meaningOfLife = 42 } { meaningOfLife = null }
-  |                          ^^^^^^^^^^^^^ override here
+2 |   meaningOfLife = 42 } { delete meaningOfLife }
+  |                                 ^^^^^^^^^^^^^ override here
   |
-2 |   meaningOfLife = 42 } { meaningOfLife = null }
+2 |   meaningOfLife = 42 } { delete meaningOfLife }
   |   ^^^^^^^^^^^^^ defined here
   |
 1 | { final
@@ -787,43 +787,7 @@ error:
 QCL:
 
 ```
-{ final x = null }
-```
-
-Error message:
-```
-error:
-    null row cannot be marked final
-  |
-1 | { final x = null }
-  |   ^^^^^ marked as final here
-
-```
-
-------------
-
-QCL:
-
-```
-{ private x = null }
-```
-
-Error message:
-```
-error:
-    null row cannot be marked private
-  |
-1 | { private x = null }
-  |   ^^^^^^^ marked as private here
-
-```
-
-------------
-
-QCL:
-
-```
-{ a = abstract }
+{ abstract a }
 ```
 
 Error message:
@@ -831,8 +795,8 @@ Error message:
 error:
     abstract field cannot be used in non-abstract tuples
   |
-1 | { a = abstract }
-  |       ^^^^^^^^ abstract field
+1 | { abstract a }
+  |   ^^^^^^^^ abstract field
 
 ```
 
@@ -861,7 +825,7 @@ QCL:
 ```
 # Abstract tuples are not eagerly evaluated.
 abstract {
-  a = abstract,
+  abstract a,
   assert (a % 2 == 0),
   ret = a / 2,
 }
@@ -880,7 +844,7 @@ QCL:
 ```
 # Abstract tuple updates are also not eagerly evaluated.
 abstract {
-  a = abstract,
+  abstract a,
   assert (a % 2 == 0),
   ret = a / 2,
 } { a = 42 }
@@ -898,7 +862,7 @@ QCL:
 
 ```
 abstract {
-  a = abstract,
+  abstract a,
   assert (a % 2 == 0),
   ret = a / 2,
 } { a = 42 }
@@ -918,12 +882,12 @@ QCL:
 ```
 {
   checkEven = abstract {
-    a = abstract,
+    abstract a,
     assert(a % 2 == 0),
     ret = a / 2,
   },
   e1 = checkEven { a = 100 },
-} { e1 = e1.eval.ret, checkEven = null }
+} { e1 = e1.eval.ret, delete checkEven }
 ```
 
 JSON result:
@@ -939,12 +903,12 @@ QCL:
 ```
 {
   checkEven = abstract {
-    a = abstract,
+    abstract a,
     assert(a % 2 == 0),
     ret = a / 2,
   },
   e1 = checkEven { a = 105 },
-} { e1 = e1.eval.ret, checkEven = null }
+} { e1 = e1.eval.ret, delete checkEven }
 ```
 
 Error message:
@@ -981,7 +945,7 @@ QCL:
 
 ```
 # Variables in abstract tuple updates can also refer to the surrounding scope.
-{a = 1, b = abstract{c = abstract}}{b = b{c = a}.eval, assert (b.c==a)}
+{a = 1, b = abstract{abstract c}}{b = b{c = a}.eval, assert (b.c==a)}
 ```
 
 JSON result:
@@ -996,7 +960,7 @@ QCL:
 
 ```
 # Variables in abstract tuple updates refer to the value upon the update, not during evaluation.
-{a = 1, b = abstract{c = abstract}}{b {c = a}, a = a + a, b = b.eval, assert (b.c!=a)}
+{a = 1, b = abstract{abstract c}}{b {c = a}, a = a + a, b = b.eval, assert (b.c!=a)}
 ```
 
 JSON result:
@@ -1011,9 +975,9 @@ QCL:
 
 ```
 abstract{
-  a= abstract,
+  abstract a,
   b= abstract{
-    x= abstract,
+    abstract x,
     ret= x*10
   },
   ret= a+b{x=a*100}.eval.ret
@@ -1032,9 +996,9 @@ QCL:
 
 ```
 {assert(1004==abstract{
-  a= abstract,
+  abstract a,
   b= abstract{
-    x= abstract,
+    abstract x,
     ret= x*10
   },
   ret= a+b{x=a*100}.eval.ret
@@ -1048,12 +1012,12 @@ error:
   |
 1 | {assert(1004==abstract{
   |         ^^^^^^^^^^^^^^^
-2 |   a= abstract,
-  | ^^^^^^^^^^^^^^
+2 |   abstract a,
+  | ^^^^^^^^^^^^^
 3 |   b= abstract{
   | ^^^^^^^^^^^^^^
-4 |     x= abstract,
-  | ^^^^^^^^^^^^^^^^
+4 |     abstract x,
+  | ^^^^^^^^^^^^^^^
 5 |     ret= x*10
   | ^^^^^^^^^^^^^
 6 |   },
@@ -1077,7 +1041,7 @@ QCL:
 
 ```
 # Mutual reference is not allowed
-abstract { a = abstract, b = a+1 } { a = b+1 } .eval
+abstract { abstract a, b = a+1 } { a = b+1 } .eval
 ```
 
 Error message:
@@ -1085,8 +1049,8 @@ Error message:
 error:
     variable reference "b" does not exist
   |
-2 | abstract { a = abstract, b = a+1 } { a = b+1 } .eval
-  |                                          ^ undefined variable reference
+2 | abstract { abstract a, b = a+1 } { a = b+1 } .eval
+  |                                        ^ undefined variable reference
 
 ```
 
@@ -1095,7 +1059,7 @@ error:
 QCL:
 
 ```
-{a=2, b = abstract { c = abstract, assert (c%a == 0) }} { b = b { c = 10 }.eval }
+{a=2, b = abstract { abstract c, assert (c%a == 0) }} { b = b { c = 10 }.eval }
 ```
 
 JSON result:
@@ -1109,7 +1073,7 @@ JSON result:
 QCL:
 
 ```
-{a=2, b = abstract { c = abstract, assert (c%a == 0) }} { b = b { c = 11 }.eval }
+{a=2, b = abstract { abstract c, assert (c%a == 0) }} { b = b { c = 11 }.eval }
 ```
 
 Error message:
@@ -1117,14 +1081,14 @@ Error message:
 error:
     assertion failed
   |
-1 | {a=2, b = abstract { c = abstract, assert (c%a == 0) }} { b = b { c = 11 }.eval }
-  |                                            ^^^^^^^^ evaluates to false
+1 | {a=2, b = abstract { abstract c, assert (c%a == 0) }} { b = b { c = 11 }.eval }
+  |                                          ^^^^^^^^ evaluates to false
   |
-1 | {a=2, b = abstract { c = abstract, assert (c%a == 0) }} { b = b { c = 11 }.eval }
-  |                                              ^ this has value 2
+1 | {a=2, b = abstract { abstract c, assert (c%a == 0) }} { b = b { c = 11 }.eval }
+  |                                            ^ this has value 2
   |
-1 | {a=2, b = abstract { c = abstract, assert (c%a == 0) }} { b = b { c = 11 }.eval }
-  |                                            ^ this has value 11
+1 | {a=2, b = abstract { abstract c, assert (c%a == 0) }} { b = b { c = 11 }.eval }
+  |                                          ^ this has value 11
 
 ```
 
