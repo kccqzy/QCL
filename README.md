@@ -442,78 +442,6 @@ JSON result:
 QCL:
 
 ```
-a{x=1} {y=+x}
-```
-
-Error message:
-```
-error:
-    variable reference "a" must be inside a tuple
-  |
-1 | a{x=1} {y=+x}
-  | ^ top-level variable reference
-
-```
-
-------------
-
-QCL:
-
-```
-a.b.c
-```
-
-Error message:
-```
-error:
-    variable reference "a" must be inside a tuple
-  |
-1 | a.b.c
-  | ^ top-level variable reference
-
-```
-
-------------
-
-QCL:
-
-```
-a.b{x=1}
-```
-
-Error message:
-```
-error:
-    variable reference "a" must be inside a tuple
-  |
-1 | a.b{x=1}
-  | ^ top-level variable reference
-
-```
-
-------------
-
-QCL:
-
-```
-a{x=1}.b
-```
-
-Error message:
-```
-error:
-    variable reference "a" must be inside a tuple
-  |
-1 | a{x=1}.b
-  | ^ top-level variable reference
-
-```
-
-------------
-
-QCL:
-
-```
 {a = {b = {c=1}}, ret = a.b{x=1}}.ret
 ```
 
@@ -922,6 +850,24 @@ error:
 4 |     assert(a % 2 == 0),
   |            ^ this has value 105
 
+```
+
+------------
+
+QCL:
+
+```
+abstract {
+  abstract a,
+  assert (a % 2 == 0),
+  ret = a / 2,
+} { a = 42 } { a = 64 }.eval
+```
+
+JSON result:
+
+```
+{"a":64,"ret":32}
 ```
 
 ------------

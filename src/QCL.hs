@@ -35,7 +35,10 @@ import Data.Vector (fromList)
 import qualified Text.Earley as E
 
 data Positioned a = Positioned {pBegin :: (Int, Int), pEnd :: (Int, Int), pValue :: a}
-  deriving (Show, Functor, Eq, Ord)
+  deriving (Functor, Eq, Ord)
+
+instance (Show a) => Show (Positioned a) where
+  showsPrec prec Positioned {..} = showsPrec prec pValue
 
 type PositionedText = Positioned Text
 
@@ -375,6 +378,7 @@ data AbstractTupleValueRow
   { atprDefinitionLoc :: PositionedText,
     atprValue :: PositionedRowExpr,
     atprEvalOrder :: Int,
+    atprEvalOrderBehavior :: EvalOrderBehavior,
     atprCapturedEnvironment :: EvalEnvironment
   }
   deriving (Show)
@@ -395,6 +399,9 @@ data AbstractTupleValue
   { atvFields :: M.Map Text AbstractTupleValueRow,
     atvAssertions :: [AbstractTupleValueAssertion]
   }
+  deriving (Show)
+
+data EvalOrderBehavior = EvalOrderKeep | EvalOrderUpdate
   deriving (Show)
 
 instance Aeson.ToJSON Value where
@@ -433,7 +440,9 @@ data InsideTupleEnv = InsideTupleEnv
   { eCurrentTuple :: TupleValue,
     eCurrentTuplePrivates :: M.Map Text ()
   }
-  deriving (Show)
+
+instance Show InsideTupleEnv where
+  showsPrec prec InsideTupleEnv {..} = showsPrec prec (M.keys eCurrentTuple)
 
 -- | The evaluation environment is a series of environments that represents the
 -- nesting structure of the original code.
@@ -683,7 +692,11 @@ intoAbstractTupleValueFromExprUpdate initial texprs capturedEnvironment =
               { atprDefinitionLoc = label,
                 atprValue = rowExpr,
                 atprEvalOrder = order,
-                atprCapturedEnvironment = capturedEnvironment
+                atprCapturedEnvironment = capturedEnvironment,
+                atprEvalOrderBehavior =
+                  case pValue rowExpr of
+                    AbstractRow -> EvalOrderKeep
+                    _ -> EvalOrderUpdate
               }
           alterer :: Maybe AbstractTupleValueRow -> Either EvalError (Maybe AbstractTupleValueRow)
           alterer orig = case orig of
@@ -700,10 +713,10 @@ intoAbstractTupleValueFromExprUpdate initial texprs capturedEnvironment =
             Just
               ( AbstractTupleValueRow
                   { atprEvalOrder = oldOrder,
-                    atprValue = Positioned {pValue = AbstractRow}
+                    atprEvalOrderBehavior = EvalOrderKeep
                   }
                 ) ->
-                pure (Just newValue {atprEvalOrder = oldOrder})
+                pure (Just newValue {atprEvalOrder = oldOrder, atprEvalOrderBehavior = EvalOrderKeep})
             _ ->
               pure (Just newValue)
       newFields <- M.alterF alterer (pValue label) fs

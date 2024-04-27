@@ -37,10 +37,6 @@ examples =
     "{\n a = 1,\n b = a + a,\n c = a + b + c\n}.c",
     "[]",
     "[1, true]",
-    "a{x=1} {y=+x}",
-    "a.b.c",
-    "a.b{x=1}",
-    "a{x=1}.b",
     "{a = {b = {c=1}}, ret = a.b{x=1}}.ret",
     "{a = {b = {c=1}}, ret = a{x=1}.b}.ret",
     "{ x=1, y=2, z=3 } {z = 4}",
@@ -79,6 +75,7 @@ examples =
     \  },\n\
     \  e1 = checkEven { a = 105 },\n\
     \} { e1 = e1.eval.ret, delete checkEven }",
+    "abstract {\n  abstract a,\n  assert (a % 2 == 0),\n  ret = a / 2,\n} { a = 42 } { a = 64 }.eval",
     "# Variables in abstract tuples can refer to the surrounding scope (lexical scope).\n\
     \{a = 1, b = abstract{c = a}.eval, assert (b.c==a)}",
     "# Variables in abstract tuple updates can also refer to the surrounding scope.\n\
