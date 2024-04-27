@@ -201,6 +201,28 @@ examples =
            x += 1,
          }
          |],
+    [text|
+         { x = 100,
+           inner = abstract {
+             x = 2,
+             y = 4,
+           } {
+             # Still does not work.
+             x += 1,
+           }.eval
+         }
+         |],
+    [text|
+         { x = 100,
+           inner = abstract {
+             x = 2,
+             y = 4,
+           } {
+             # Works, but refers to the outer x.
+             x = x + 1,
+           }.eval
+         }
+         |],
     "{a=2, b = abstract { abstract c, assert (c%a == 0) }} { b = b { c = 10 }.eval }",
     "{a=2, b = abstract { abstract c, assert (c%a == 0) }} { b = b { c = 11 }.eval }",
     "abstract { abstract x, private y = x + x, z = y * y } { x = 10 }.eval",

@@ -75,8 +75,13 @@ data Expr
   | AbstractTuple (Positioned [PositionedTupleExpr])
   | EvalAbstract PositionedExpr (Positioned ())
   | List [PositionedExpr]
-  | Var PositionedText
+  | Var PositionedText VariableLookupScope
   | Member PositionedExpr PositionedText
+  deriving (Show)
+
+data VariableLookupScope
+  = VariableLookupCurrentScope
+  | VariableLookupAllScopes
   deriving (Show)
 
 data RowAttribute = RowFinal | RowPrivate
@@ -259,7 +264,7 @@ expr = mdo
   parenthesized :: E.Prod r Text PositionedText PositionedExpr <-
     E.rule $ pValue <$> between (lit "(") (lit ")") val
 
-  let var = (\t -> Var t <$ t) <$> E.terminal identifier E.<?> "identifier"
+  let var = (\t -> Var t VariableLookupAllScopes <$ t) <$> E.terminal identifier E.<?> "identifier"
 
   let abstractTuple = do
         kw <- lit "abstract"
@@ -285,7 +290,7 @@ expr = mdo
               ( \updates parsedIdentifier ->
                   withPosition2
                     TupleUpdate
-                    (Var parsedIdentifier <$ parsedIdentifier)
+                    (Var parsedIdentifier VariableLookupCurrentScope <$ parsedIdentifier)
                     updates
               )
                 <$> between (lit "{") (lit "}") tupleContents
@@ -295,7 +300,7 @@ expr = mdo
                       ( \e parsedIdentifier ->
                           withPosition2
                             ct
-                            (Var parsedIdentifier <$ parsedIdentifier)
+                            (Var parsedIdentifier VariableLookupCurrentScope <$ parsedIdentifier)
                             e
                       )
                         <$> (lit op *> val)
@@ -427,6 +432,8 @@ data EvalError
     TopLevelVariableError PositionedText
   | -- | A variable does not exist.
     NonExistentVariableError PositionedText
+  | -- | A variable does not exist in current scope.
+    NonExistentVariableInCurrentScopeError PositionedText
   | -- | A variable reference that could refer to at least two definitions.
     AmbiguousVariableError PositionedText PositionedText PositionedText
   | -- | Attempt to override a tuple row that is marked final.
@@ -514,22 +521,24 @@ evalExpr pexpr =
             lift $ Left (PrivateRowAccessError label prevDef (void privatePos))
           Just (TupleValueRow {..}) -> pure tprValue
         _ -> lift $ Left (TypeError tuple ExpectTuple)
-    Var var -> lookupVariable var
+    Var var scope -> lookupVariable var scope
     EvalAbstract tempExpr _ -> do
       tem <- evalExpr tempExpr
       case tem of
         AbstractTupleValue atv -> evalAbstractTuple atv
         _ -> lift $ Left (TypeError tempExpr ExpectAbstractTuple)
 
-lookupVariable :: PositionedText -> Eval Value
-lookupVariable p = ReaderT $ \case
+lookupVariable :: PositionedText -> VariableLookupScope -> Eval Value
+lookupVariable p scope = ReaderT $ \case
   [] -> Left (TopLevelVariableError p)
   InsideTupleEnv {..} : outer ->
     case M.lookup (pValue p) eCurrentTuple of
-      Nothing ->
-        case runReaderT (lookupVariable p) outer of
-          Left (TopLevelVariableError _) -> Left (NonExistentVariableError p)
-          r -> r
+      Nothing -> case scope of
+        VariableLookupCurrentScope -> Left (NonExistentVariableInCurrentScopeError p)
+        VariableLookupAllScopes ->
+          case runReaderT (lookupVariable p scope) outer of
+            Left (TopLevelVariableError _) -> Left (NonExistentVariableError p)
+            r -> r
       Just TupleValueRow {..} ->
         case lookupVariableDefOnce outer of
           Just secondDef -> Left (AmbiguousVariableError p tprDefitionLoc secondDef)
@@ -619,8 +628,8 @@ collectVariables pexpr =
       collected <- collectVariables tuple
       val <- evalExpr pexpr
       pure (M.insert (Down (void label)) val collected)
-    Var var -> do
-      val <- lookupVariable var
+    Var var scope -> do
+      val <- lookupVariable var scope
       pure (M.singleton (Down (void var)) val)
     EvalAbstract _ ev -> do
       val <- evalExpr pexpr
@@ -735,6 +744,8 @@ evalQCL text = do
             "variable reference " <> escapedText l <> " must be inside a tuple\n" <> explainContext l "top-level variable reference"
           NonExistentVariableError l ->
             "variable reference " <> escapedText l <> " does not exist\n" <> explainContext l "undefined variable reference"
+          NonExistentVariableInCurrentScopeError l ->
+            "variable reference " <> escapedText l <> " does not exist in current tuple\n" <> explainContext l "undefined variable reference"
           AmbiguousVariableError var l1 l2 ->
             "variable reference " <> escapedText l1 <> " is ambiguous\n" <> explainContext var "variable reference used here" <> explainContext l1 "possible referent" <> explainContext l2 "another possible referent"
           FinalRowOverrideError override def final ->

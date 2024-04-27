@@ -1187,7 +1187,7 @@ abstract {
 Error message:
 ```
 error:
-    variable reference "x" does not exist
+    variable reference "x" does not exist in current tuple
   |
 7 |   x += 1,
   |   ^ undefined variable reference
@@ -1213,6 +1213,54 @@ JSON result:
 
 ```
 {"ret":8,"x":3,"y":4}
+```
+
+------------
+
+QCL:
+
+```
+{ x = 100,
+  inner = abstract {
+    x = 2,
+    y = 4,
+  } {
+    # Still does not work.
+    x += 1,
+  }.eval
+}
+```
+
+Error message:
+```
+error:
+    variable reference "x" does not exist in current tuple
+  |
+7 |     x += 1,
+  |     ^ undefined variable reference
+
+```
+
+------------
+
+QCL:
+
+```
+{ x = 100,
+  inner = abstract {
+    x = 2,
+    y = 4,
+  } {
+    # Works, but refers to the outer x.
+    x = x + 1,
+  }.eval
+}
+```
+
+JSON result:
+
+```
+{"inner":{"x":101,"y":4},"x":100}
 ```
 
 ------------
