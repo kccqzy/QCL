@@ -263,6 +263,24 @@ JSON result:
 QCL:
 
 ```
+{x = true,
+ y }
+```
+
+Error message:
+```
+parse error:
+  |
+2 |  y }
+  |    ^ expecting "%=", "//=", "/=", "*=", "-=", "+=", "{", "=", found "}"
+
+```
+
+------------
+
+QCL:
+
+```
 {private x = true,
  y = x + 1}
 ```
@@ -484,13 +502,27 @@ JSON result:
 QCL:
 
 ```
-{ x=1, y=2, z=3 } {z = 4 + z}
+{ x=1, y=2, z=3 } {z += 4}
 ```
 
 JSON result:
 
 ```
 {"x":1,"y":2,"z":7}
+```
+
+------------
+
+QCL:
+
+```
+{ x=1, y=2, z=3 } {z *= z}
+```
+
+JSON result:
+
+```
+{"x":1,"y":2,"z":9}
 ```
 
 ------------

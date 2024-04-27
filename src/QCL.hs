@@ -122,7 +122,7 @@ tokenize = concatMap tokenizeLine . zip [1 ..] . T.lines
                   let newcolno = colno + 1 in Just (Positioned (lineno, colno) (lineno, newcolno) (T.singleton h), (newcolno, r))
 
 multiCharPunct :: [Text]
-multiCharPunct = ["&&", "||", "==", "!=", "<=", ">=", "//"]
+multiCharPunct = ["&&", "||", "==", "!=", "<=", ">=", "//=", "//", "+=", "-=", "*=", "/=", "%="]
 
 reservedWords :: [Text]
 reservedWords = ["true", "false", "assert", "delete", "private", "final", "abstract", "eval"]
@@ -231,16 +231,14 @@ expr = mdo
             pure (fromPositionApp op t)
        in un <|> bool <|> number <|> memberOrEvalOrUpdateExpr
 
-  bool :: E.Prod r Text PositionedText PositionedExpr <-
-    E.rule $ (Boolean True <$$ lit "true") <|> (Boolean False <$$ lit "false")
+  let bool = (Boolean True <$$ lit "true") <|> (Boolean False <$$ lit "false")
 
-  number :: E.Prod r Text PositionedText PositionedExpr <-
-    E.rule $
-      let readNumber :: PositionedText -> Maybe (Positioned Double)
-          readNumber pt = case TR.double (pValue pt) of
-            Right (n, "") -> Just (pt $> n)
-            _ -> Nothing
-       in (Number <$>) <$> E.terminal readNumber E.<?> "number literal"
+  let number =
+        let readNumber :: PositionedText -> Maybe (Positioned Double)
+            readNumber pt = case TR.double (pValue pt) of
+              Right (n, "") -> Just (pt $> n)
+              _ -> Nothing
+         in (Number <$>) <$> E.terminal readNumber E.<?> "number literal"
 
   memberOrEvalOrUpdateExpr :: E.Prod r Text PositionedText PositionedExpr <-
     E.rule $
@@ -260,61 +258,68 @@ expr = mdo
   parenthesized :: E.Prod r Text PositionedText PositionedExpr <-
     E.rule $ pValue <$> between (lit "(") (lit ")") val
 
-  var :: E.Prod r Text PositionedText PositionedExpr <-
-    E.rule $ (\t -> Var t <$ t) <$> E.terminal identifier E.<?> "identifier"
+  let var = (\t -> Var t <$ t) <$> E.terminal identifier E.<?> "identifier"
 
-  abstractTuple :: E.Prod r Text PositionedText PositionedExpr <-
-    E.rule $ do
-      kw <- lit "abstract"
-      tp <- between (lit "{") (lit "}") tupleContents
-      pure (withPosition2 (const AbstractTuple) kw tp)
+  let abstractTuple = do
+        kw <- lit "abstract"
+        tp <- between (lit "{") (lit "}") tupleContents
+        pure (withPosition2 (const AbstractTuple) kw tp)
 
-  tuple :: E.Prod r Text PositionedText PositionedExpr <-
-    E.rule $ (Tuple <$>) <$> between (lit "{") (lit "}") tupleContents
+  let tuple = (Tuple <$>) <$> between (lit "{") (lit "}") tupleContents
 
   tupleContents <- tupleItem `sepEndBy` lit ","
 
-  tupleItem <- E.rule $ tupleRow <|> tupleAssertion
+  let tupleItem = tupleRow <|> tupleAssertion
 
-  tupleRow :: E.Prod r Text PositionedText PositionedTupleExpr <-
-    E.rule $
-      tupleDeleteRow
-        <|> tupleAbstractRow
-        <|> do
-          attr <- pure Nothing <|> (Just <$> (RowFinal <$$ lit "final")) <|> (Just <$> (RowPrivate <$$ lit "private"))
-          k <- E.terminal identifier E.<?> "identifier"
-          let assignedValue = const <$> (lit "=" *> val)
-          let updateSyntaxSugar =
-                -- Syntax sugar to perform a tuple update without the = token. Due to
-                -- ApplicativeDo desugaring limitations we cannot use the identifier
-                -- directly so we have to parse into a function that accepts it.
-                ( \updates parsedIdentifier ->
-                    withPosition2
-                      TupleUpdate
-                      (Var parsedIdentifier <$ parsedIdentifier)
-                      updates
+  let tupleRow = tupleDeleteRow <|> tupleAbstractRow <|> tupleValueRow
+
+  let tupleValueRow = do
+        attr <- pure Nothing <|> (Just <$> (RowFinal <$$ lit "final")) <|> (Just <$> (RowPrivate <$$ lit "private"))
+        k <- E.terminal identifier E.<?> "identifier"
+        let assignedValue = const <$> (lit "=" *> val)
+        let updateSyntaxSugar =
+              -- Syntax sugar to perform a tuple update without the = token. Due to
+              -- ApplicativeDo desugaring limitations we cannot use the identifier
+              -- directly so we have to parse into a function that accepts it.
+              ( \updates parsedIdentifier ->
+                  withPosition2
+                    TupleUpdate
+                    (Var parsedIdentifier <$ parsedIdentifier)
+                    updates
+              )
+                <$> between (lit "{") (lit "}") tupleContents
+        let compoundUpdatesSugar =
+              asum
+                ( ( \(op, ct) ->
+                      ( \e parsedIdentifier ->
+                          withPosition2
+                            ct
+                            (Var parsedIdentifier <$ parsedIdentifier)
+                            e
+                      )
+                        <$> (lit op *> val)
+                  )
+                    <$> [("+=", Plus), ("-=", Minus), ("*=", Mul), ("/=", Div), ("//=", IDiv), ("%=", Mod)]
                 )
-                  <$> between (lit "{") (lit "}") tupleContents
-          vf <- assignedValue <|> updateSyntaxSugar
-          pure (let v = vf k in fromPosition2 k v (Row k (ValuedRow attr v <$ v)))
+        vf <- assignedValue <|> updateSyntaxSugar <|> compoundUpdatesSugar
+        pure (let v = vf k in fromPosition2 k v (Row k (ValuedRow attr v <$ v)))
 
-  tupleAbstractRow :: E.Prod r Text PositionedText PositionedTupleExpr <- E.rule $ do
-    abstract <- lit "abstract"
-    k <- E.terminal identifier E.<?> "identifier"
-    pure (fromPosition2 abstract k (Row k (AbstractRow <$ abstract)))
+  let tupleAbstractRow = do
+        abstract <- lit "abstract"
+        k <- E.terminal identifier E.<?> "identifier"
+        pure (fromPosition2 abstract k (Row k (AbstractRow <$ abstract)))
 
-  tupleDeleteRow :: E.Prod r Text PositionedText PositionedTupleExpr <- E.rule $ do
-    abstract <- lit "delete"
-    k <- E.terminal identifier E.<?> "identifier"
-    pure (fromPosition2 abstract k (Row k (DeleteRow <$ abstract)))
+  let tupleDeleteRow = do
+        delete <- lit "delete"
+        k <- E.terminal identifier E.<?> "identifier"
+        pure (fromPosition2 delete k (Row k (DeleteRow <$ delete)))
 
-  tupleAssertion <- E.rule $ do
-    l <- lit "assert"
-    v <- parenthesized
-    pure (fromPosition2 l v (Assertion v))
+  let tupleAssertion = do
+        l <- lit "assert"
+        v <- parenthesized
+        pure (fromPosition2 l v (Assertion v))
 
-  list :: E.Prod r Text PositionedText PositionedExpr <-
-    E.rule $ (List <$>) <$> between (lit "[") (lit "]") listContents
+  let list = (List <$>) <$> between (lit "[") (lit "]") listContents
 
   listContents <- val `sepEndBy` lit ","
 
@@ -341,7 +346,7 @@ parseQCL t = case E.fullParses parser (tokenize t) of
   where
     tl = T.lines t
     printError :: ParseError -> TL.Text
-    printError (ParseError pel msg) = TLB.toLazyText("parse error:\n" <> errorContext)
+    printError (ParseError pel msg) = TLB.toLazyText ("parse error:\n" <> errorContext)
       where
         errorContext =
           case pel of
