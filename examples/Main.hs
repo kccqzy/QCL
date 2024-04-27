@@ -56,6 +56,8 @@ examples =
     "{ x=1, y=2, z={a=1, b=y} }",
     "{ x=1, y=2, z={a=1, b=a} }",
     "{ x=1, y=2, z={x=1, y=x} }",
+    "{ inner = { private x = 1, y = 2 }, result = inner.x }",
+    "{ private x = 1, inner = { y = 2 + x } }",
     "{ a=1, b={ x=2, y=3 } } { b = b { y = y + x + a } }",
     "{ a=1, b={ x=2, y=3 } } { b { y = y + x + a } }",
     "{ x = 1, y = 2, z = { a = x + 1, b = y + a + 2}}.z.b",

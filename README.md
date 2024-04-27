@@ -308,6 +308,9 @@ error:
   |                                 ^ access of private field here
   |
 1 | {private x = true, y = x + 1} { x = false }
+  |          ^ defined here
+  |
+1 | {private x = true, y = x + 1} { x = false }
   |  ^^^^^^^ marked as private here
 
 ```
@@ -329,6 +332,9 @@ error:
   |                                        ^ access of private field here
   |
 1 | {private x = true, y = x + 1} { delete x }
+  |          ^ defined here
+  |
+1 | {private x = true, y = x + 1} { delete x }
   |  ^^^^^^^ marked as private here
 
 ```
@@ -348,6 +354,9 @@ error:
   |
 1 | {private x = true, y = x + 1}.x
   |                               ^ access of private field here
+  |
+1 | {private x = true, y = x + 1}.x
+  |          ^ defined here
   |
 1 | {private x = true, y = x + 1}.x
   |  ^^^^^^^ marked as private here
@@ -698,6 +707,44 @@ error:
 1 | { x=1, y=2, z={x=1, y=x} }
   |   ^ another possible referent
 
+```
+
+------------
+
+QCL:
+
+```
+{ inner = { private x = 1, y = 2 }, result = inner.x }
+```
+
+Error message:
+```
+error:
+    field marked as private cannot be accessed outside its enclosing tuple
+  |
+1 | { inner = { private x = 1, y = 2 }, result = inner.x }
+  |                                                    ^ access of private field here
+  |
+1 | { inner = { private x = 1, y = 2 }, result = inner.x }
+  |                     ^ defined here
+  |
+1 | { inner = { private x = 1, y = 2 }, result = inner.x }
+  |             ^^^^^^^ marked as private here
+
+```
+
+------------
+
+QCL:
+
+```
+{ private x = 1, inner = { y = 2 + x } }
+```
+
+JSON result:
+
+```
+{"inner":{"y":3}}
 ```
 
 ------------
@@ -1143,6 +1190,9 @@ error:
   |
 1 | abstract { abstract x, private y = x + x } { x = 10 }.eval.y
   |                                                            ^ access of private field here
+  |
+1 | abstract { abstract x, private y = x + x } { x = 10 }.eval.y
+  |                                ^ defined here
   |
 1 | abstract { abstract x, private y = x + x } { x = 10 }.eval.y
   |                        ^^^^^^^ marked as private here

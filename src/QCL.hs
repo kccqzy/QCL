@@ -377,8 +377,7 @@ data TupleValueRow
   = TupleValueRow
   { tprDefitionLoc :: PositionedText,
     tprValue :: Value,
-    tprFinality :: TupleValueRowFinality,
-    tprPrivacy :: TupleValueRowPrivacy
+    tprAttr :: Maybe (Positioned RowAttribute)
   }
   deriving (Show)
 
@@ -400,12 +399,6 @@ data AbstractTupleValueAssertion
   }
   deriving (Show)
 
-newtype TupleValueRowFinality = TupleValueRowFinality (Maybe (Positioned ()))
-  deriving (Show)
-
-newtype TupleValueRowPrivacy = TupleValueRowPrivacy (Maybe (Positioned ()))
-  deriving (Show)
-
 data AbstractTupleValue
   = AbstractTupleRows
   { atvFields :: M.Map Text AbstractTupleValueRow,
@@ -422,7 +415,7 @@ instance Aeson.ToJSON Value where
   toJSON (ListValue l) = Aeson.Array (fromList (Aeson.toJSON <$> l))
   toJSON (TupleValue tv) = Aeson.Object (AesonMap.fromMapText (ML.mapMaybe inner tv))
     where
-      inner TupleValueRow {tprPrivacy = TupleValueRowPrivacy (Just _)} = Nothing
+      inner TupleValueRow {tprAttr = Just Positioned {pValue = RowPrivate}} = Nothing
       inner TupleValueRow {tprValue = v} = Just (Aeson.toJSON v)
   toJSON (AbstractTupleValue {}) = Aeson.Null
 
@@ -434,7 +427,6 @@ data EvalError
     AssertionFailed PositionedExpr (M.Map (Down (Positioned ())) Value)
   | -- | A member reference refers to a non-existing member.
     NonExistentLabelError TupleValue PositionedText
-  | PrivateRowAccessError PositionedText (Positioned ())
   | -- | A variable reference is attempted but is not inside a tuple.
     TopLevelVariableError PositionedText
   | -- | A variable does not exist.
@@ -443,6 +435,7 @@ data EvalError
     AmbiguousVariableError PositionedText PositionedText PositionedText
   | -- | Attempt to override a tuple row that is marked final.
     FinalRowOverrideError PositionedText PositionedText (Positioned ())
+  | PrivateRowAccessError PositionedText PositionedText (Positioned ())
   | -- | Making a field abstract when not inside an abstract tuple.
     AbstractInNonAbstractTuple (Positioned ())
   | AbstractFieldNotOverridden (Positioned ())
@@ -521,8 +514,8 @@ evalExpr pexpr =
       case tupleVal of
         TupleValue t -> case M.lookup (pValue label) t of
           Nothing -> lift $ Left (NonExistentLabelError t label)
-          Just (TupleValueRow {tprPrivacy = TupleValueRowPrivacy (Just privatePos)}) ->
-            lift $ Left (PrivateRowAccessError label privatePos)
+          Just (TupleValueRow {tprDefitionLoc = prevDef, tprAttr = (Just privatePos@Positioned {pValue = RowPrivate})}) ->
+            lift $ Left (PrivateRowAccessError label prevDef (void privatePos))
           Just (TupleValueRow {..}) -> pure tprValue
         _ -> lift $ Left (TypeError tuple ExpectTuple)
     Var var -> lookupVariable var
@@ -568,10 +561,10 @@ evalTupleExprs initial updates = do
           let alterer :: Maybe TupleValueRow -> Eval (Maybe TupleValueRow)
               alterer orig =
                 case (orig, val) of
-                  (Just TupleValueRow {tprDefitionLoc = prevDef, tprFinality = TupleValueRowFinality (Just finalPos)}, _) ->
-                    lift $ Left (FinalRowOverrideError label prevDef finalPos)
-                  (Just TupleValueRow {tprPrivacy = TupleValueRowPrivacy (Just privatePos)}, _) ->
-                    lift $ Left (PrivateRowAccessError label privatePos)
+                  (Just TupleValueRow {tprDefitionLoc = prevDef, tprAttr = Just pAttr}, _) ->
+                    case pValue pAttr of
+                      RowFinal -> lift $ Left (FinalRowOverrideError label prevDef (void pAttr))
+                      RowPrivate -> lift $ Left (PrivateRowAccessError label prevDef (void pAttr))
                   (_, Nothing) ->
                     pure Nothing
                   (Just TupleValueRow {tprDefitionLoc = prevDef}, Just _)
@@ -582,26 +575,13 @@ evalTupleExprs initial updates = do
                           TupleValueRow
                             { tprDefitionLoc = label,
                               tprValue = v,
-                              tprFinality = getRowFinality attr,
-                              tprPrivacy = getRowPrivacy attr
+                              tprAttr = attr
                             }
                      in pure (Just newValue)
           InsideTupleEnv <$> M.alterF alterer (pValue label) eCurrentTuple
         Assertion assertion -> do
           evalAssertion assertion
           pure ite
-
-getRowFinality :: Maybe (Positioned RowAttribute) -> TupleValueRowFinality
-getRowFinality attr =
-  case attr of
-    Just p@Positioned {pValue = RowFinal} -> TupleValueRowFinality (Just (void p))
-    _ -> TupleValueRowFinality Nothing
-
-getRowPrivacy :: Maybe (Positioned RowAttribute) -> TupleValueRowPrivacy
-getRowPrivacy attr =
-  case attr of
-    Just p@Positioned {pValue = RowPrivate} -> TupleValueRowPrivacy (Just (void p))
-    _ -> TupleValueRowPrivacy Nothing
 
 evalAssertion :: PositionedExpr -> Eval ()
 evalAssertion assertion = do
@@ -664,7 +644,19 @@ evalAbstractTuple (AbstractTupleRows fs assertions) = do
               AbstractRow -> lift $ Left (AbstractFieldNotOverridden (void atprValue))
               ValuedRow attr pexpr -> do
                 val <- evalExpr pexpr
-                pure it {eCurrentTuple = M.insert (pValue atprDefinitionLoc) (TupleValueRow {tprDefitionLoc = atprDefinitionLoc, tprValue = val, tprFinality = getRowFinality attr, tprPrivacy = getRowPrivacy attr}) eCurrentTuple}
+                pure
+                  InsideTupleEnv
+                    { eCurrentTuple =
+                        M.insert
+                          (pValue atprDefinitionLoc)
+                          ( TupleValueRow
+                              { tprDefitionLoc = atprDefinitionLoc,
+                                tprValue = val,
+                                tprAttr = attr
+                              }
+                          )
+                          eCurrentTuple
+                    }
     evalAbstractTupleField it (Right AbstractTupleValueAssertion {..}) =
       let newEnv = it : atpaCapturedEnvironment
        in withReaderT (const newEnv) (evalAssertion atpaExpr) >> pure it
@@ -712,16 +704,10 @@ intoAbstractTupleValueFromExprUpdate initial texprs =
           alterer :: Maybe AbstractTupleValueRow -> Either EvalError (Maybe AbstractTupleValueRow)
           alterer orig =
             case orig of
-              Just
-                ( AbstractTupleValueRow
-                    { atprDefinitionLoc = prevDef,
-                      atprValue = Positioned {pValue = ValuedRow (Just finalPos@Positioned {pValue = RowFinal}) _}
-                    }
-                  ) ->
-                  Left (FinalRowOverrideError label prevDef (void finalPos))
-              Just
-                (AbstractTupleValueRow {atprValue = Positioned {pValue = ValuedRow (Just privatePos@Positioned {pValue = RowPrivate}) _}}) ->
-                  Left (PrivateRowAccessError label (void privatePos))
+              Just AbstractTupleValueRow {atprDefinitionLoc = prevDef, atprValue = Positioned {pValue = ValuedRow (Just pAttr) _}} ->
+                case pValue pAttr of
+                  RowFinal -> Left (FinalRowOverrideError label prevDef (void pAttr))
+                  RowPrivate -> Left (PrivateRowAccessError label prevDef (void pAttr))
               Just (AbstractTupleValueRow {atprDefinitionLoc = prevLabel})
                 | M.notMember (pValue label) (atvFields initial) ->
                     Left (DuplicateLabelError label prevLabel)
@@ -766,8 +752,8 @@ evalQCL text = do
             "variable reference " <> escapedText l1 <> " is ambiguous\n" <> explainContext var "variable reference used here" <> explainContext l1 "possible referent" <> explainContext l2 "another possible referent"
           FinalRowOverrideError override def final ->
             "field marked as final cannot be overridden\n" <> explainContext override "override here" <> explainContext def "defined here" <> explainContext final "marked as final here"
-          PrivateRowAccessError label privatePos ->
-            "field marked as private cannot be accessed outside its enclosing tuple\n" <> explainContext label "access of private field here" <> explainContext privatePos "marked as private here"
+          PrivateRowAccessError label def privatePos ->
+            "field marked as private cannot be accessed outside its enclosing tuple\n" <> explainContext label "access of private field here" <> explainContext def "defined here" <> explainContext privatePos "marked as private here"
           AbstractInNonAbstractTuple abstract ->
             "abstract field cannot be used in non-abstract tuples\n" <> explainContext abstract "abstract field"
           AbstractFieldNotOverridden abstract ->
