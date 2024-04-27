@@ -3,12 +3,12 @@
 
 module Main (main) where
 
-import NeatInterpolation (text)
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy.Char8 as BL
 import Data.Foldable (forM_)
 import Data.Text (Text)
 import qualified Data.Text.IO.Utf8 as TIO
+import NeatInterpolation (text)
 import QCL
 
 examples :: [Text]
@@ -183,7 +183,27 @@ examples =
            trueOrTrue   = or { p = t, q = t }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
            falseOrFalse = or { p = f, q = f }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
          } { delete t, delete f, delete and, delete or }
-         |]
+         |],
+    [text|
+          # The omega combinator. In lambda calculus, the omega combinator diverges (infinite
+          # loop). But in this language, every abstract tuple evaluation must be explicit.
+          # Therefore, an infinite loop is impossible: it would take an infinitely long program!
+          {
+            omega = abstract {
+              abstract x,
+              ret = x { x = x }
+            },
+          } {
+            omega { x = omega },
+            o1 = omega.eval.ret,
+            o2 = omega.eval.ret.eval.ret,
+            o3 = omega.eval.ret.eval.ret.eval.ret,
+            o4 = omega.eval.ret.eval.ret.eval.ret.eval.ret,
+            o5 = omega.eval.ret.eval.ret.eval.ret.eval.ret.eval.ret,
+            o6 = omega.eval.ret.eval.ret.eval.ret.eval.ret.eval.ret.eval.ret,
+            # Ad infitinum.
+          }
+          |]
   ]
 
 main :: IO ()

@@ -1052,3 +1052,34 @@ JSON result:
 ```
 
 ------------
+
+QCL:
+
+```
+# The omega combinator. In lambda calculus, the omega combinator diverges (infinite
+# loop). But in this language, every abstract tuple evaluation must be explicit.
+# Therefore, an infinite loop is impossible: it would take an infinitely long program!
+{
+  omega = abstract {
+    abstract x,
+    ret = x { x = x }
+  },
+} {
+  omega { x = omega },
+  o1 = omega.eval.ret,
+  o2 = omega.eval.ret.eval.ret,
+  o3 = omega.eval.ret.eval.ret.eval.ret,
+  o4 = omega.eval.ret.eval.ret.eval.ret.eval.ret,
+  o5 = omega.eval.ret.eval.ret.eval.ret.eval.ret.eval.ret,
+  o6 = omega.eval.ret.eval.ret.eval.ret.eval.ret.eval.ret.eval.ret,
+  # Ad infitinum.
+}
+```
+
+JSON result:
+
+```
+{"o1":null,"o2":null,"o3":null,"o4":null,"o5":null,"o6":null,"omega":null}
+```
+
+------------
