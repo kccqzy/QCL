@@ -32,6 +32,9 @@ examples =
     "{x = true,\n y = x + 1}",
     "{x = true,\n y }",
     "{private x = true,\n y = x + 1}",
+    "{private x = true, y = x + 1} { x = false }",
+    "{private x = true, y = x + 1} { delete x }",
+    "{private x = true, y = x + 1}.x",
     "{x = true,\n assert(true), }",
     "{x = 5, assert(x % 2\n==\n0), }",
     "{x = 2,\n x = 1}",
@@ -87,24 +90,24 @@ examples =
          |],
     [text|
           {
-            checkEven = abstract {
+            private checkEven = abstract {
               abstract a,
               assert(a % 2 == 0),
               ret = a / 2,
             },
             e1 = checkEven { a = 100 },
-          } { e1 = e1.eval.ret, delete checkEven }
+          } { e1 = e1.eval.ret }
          |],
     [text|
           {
-            checkEven = abstract {
+            private checkEven = abstract {
               abstract a,
               # This will fail.
               assert(a % 2 == 0),
               ret = a / 2,
             },
             e1 = checkEven { a = 105 },
-          } { e1 = e1.eval.ret, delete checkEven }
+          } { e1 = e1.eval.ret }
          |],
     [text|
          abstract {
@@ -166,26 +169,28 @@ examples =
          |],
     "{a=2, b = abstract { abstract c, assert (c%a == 0) }} { b = b { c = 10 }.eval }",
     "{a=2, b = abstract { abstract c, assert (c%a == 0) }} { b = b { c = 11 }.eval }",
+    "abstract { abstract x, private y = x + x, z = y * y } { x = 10 }.eval",
+    "abstract { abstract x, private y = x + x } { x = 10 }.eval.y",
     [text|
          # This example showcases Church-encoded booleans in an untyped lambda calculus.
          {
-           t = abstract { abstract a, abstract b, ret = a },
-           f = abstract { abstract a, abstract b, ret = b },
+           private t = abstract { abstract a, abstract b, ret = a },
+           private f = abstract { abstract a, abstract b, ret = b },
 
            # Boolean and
-           and = abstract { abstract p, abstract q, ret = p { a = q, b = p }},
+           private and = abstract { abstract p, abstract q, ret = p { a = q, b = p }},
            trueAndFalse  = and { p = t, q = f }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
            falseAndTrue  = and { p = f, q = t }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
            trueAndTrue   = and { p = t, q = t }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
            falseAndFalse = and { p = f, q = f }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
 
            # Boolean or
-           or = abstract { abstract p, abstract q, ret = p { a = p, b = q }},
+           private or = abstract { abstract p, abstract q, ret = p { a = p, b = q }},
            trueOrFalse  = or { p = t, q = f }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
            falseOrTrue  = or { p = f, q = t }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
            trueOrTrue   = or { p = t, q = t }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
            falseOrFalse = or { p = f, q = f }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
-         } { delete t, delete f, delete and, delete or }
+         }
          |],
     [text|
           # The omega combinator. In lambda calculus, the omega combinator diverges (infinite

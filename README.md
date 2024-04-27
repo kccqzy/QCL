@@ -296,6 +296,69 @@ JSON result:
 QCL:
 
 ```
+{private x = true, y = x + 1} { x = false }
+```
+
+Error message:
+```
+error:
+    field marked as private cannot be accessed outside its enclosing tuple
+  |
+1 | {private x = true, y = x + 1} { x = false }
+  |                                 ^ access of private field here
+  |
+1 | {private x = true, y = x + 1} { x = false }
+  |  ^^^^^^^ marked as private here
+
+```
+
+------------
+
+QCL:
+
+```
+{private x = true, y = x + 1} { delete x }
+```
+
+Error message:
+```
+error:
+    field marked as private cannot be accessed outside its enclosing tuple
+  |
+1 | {private x = true, y = x + 1} { delete x }
+  |                                        ^ access of private field here
+  |
+1 | {private x = true, y = x + 1} { delete x }
+  |  ^^^^^^^ marked as private here
+
+```
+
+------------
+
+QCL:
+
+```
+{private x = true, y = x + 1}.x
+```
+
+Error message:
+```
+error:
+    field marked as private cannot be accessed outside its enclosing tuple
+  |
+1 | {private x = true, y = x + 1}.x
+  |                               ^ access of private field here
+  |
+1 | {private x = true, y = x + 1}.x
+  |  ^^^^^^^ marked as private here
+
+```
+
+------------
+
+QCL:
+
+```
 {x = true,
  assert(true), }
 ```
@@ -841,13 +904,13 @@ QCL:
 
 ```
 {
-  checkEven = abstract {
+  private checkEven = abstract {
     abstract a,
     assert(a % 2 == 0),
     ret = a / 2,
   },
   e1 = checkEven { a = 100 },
-} { e1 = e1.eval.ret, delete checkEven }
+} { e1 = e1.eval.ret }
 ```
 
 JSON result:
@@ -862,14 +925,14 @@ QCL:
 
 ```
 {
-  checkEven = abstract {
+  private checkEven = abstract {
     abstract a,
     # This will fail.
     assert(a % 2 == 0),
     ret = a / 2,
   },
   e1 = checkEven { a = 105 },
-} { e1 = e1.eval.ret, delete checkEven }
+} { e1 = e1.eval.ret }
 ```
 
 Error message:
@@ -1056,25 +1119,60 @@ error:
 QCL:
 
 ```
+abstract { abstract x, private y = x + x, z = y * y } { x = 10 }.eval
+```
+
+JSON result:
+
+```
+{"x":10,"z":400}
+```
+
+------------
+
+QCL:
+
+```
+abstract { abstract x, private y = x + x } { x = 10 }.eval.y
+```
+
+Error message:
+```
+error:
+    field marked as private cannot be accessed outside its enclosing tuple
+  |
+1 | abstract { abstract x, private y = x + x } { x = 10 }.eval.y
+  |                                                            ^ access of private field here
+  |
+1 | abstract { abstract x, private y = x + x } { x = 10 }.eval.y
+  |                        ^^^^^^^ marked as private here
+
+```
+
+------------
+
+QCL:
+
+```
 # This example showcases Church-encoded booleans in an untyped lambda calculus.
 {
-  t = abstract { abstract a, abstract b, ret = a },
-  f = abstract { abstract a, abstract b, ret = b },
+  private t = abstract { abstract a, abstract b, ret = a },
+  private f = abstract { abstract a, abstract b, ret = b },
 
   # Boolean and
-  and = abstract { abstract p, abstract q, ret = p { a = q, b = p }},
+  private and = abstract { abstract p, abstract q, ret = p { a = q, b = p }},
   trueAndFalse  = and { p = t, q = f }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
   falseAndTrue  = and { p = f, q = t }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
   trueAndTrue   = and { p = t, q = t }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
   falseAndFalse = and { p = f, q = f }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
 
   # Boolean or
-  or = abstract { abstract p, abstract q, ret = p { a = p, b = q }},
+  private or = abstract { abstract p, abstract q, ret = p { a = p, b = q }},
   trueOrFalse  = or { p = t, q = f }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
   falseOrTrue  = or { p = f, q = t }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
   trueOrTrue   = or { p = t, q = t }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
   falseOrFalse = or { p = f, q = f }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
-} { delete t, delete f, delete and, delete or }
+}
 ```
 
 JSON result:
