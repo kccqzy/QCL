@@ -8,6 +8,7 @@ import qualified Data.ByteString.Lazy.Char8 as BL
 import Data.Foldable (forM_)
 import Data.Text (Text)
 import qualified Data.Text.IO.Utf8 as TIO
+import Data.Text.Lazy.Encoding (encodeUtf8)
 import NeatInterpolation (text)
 import QCL
 
@@ -33,7 +34,7 @@ examples =
     "{x = true,\n assert(true), }",
     "{x = 5, assert(x % 2\n==\n0), }",
     "{x = 2,\n x = 1}",
-    "1 + { a = 2, b = a + 3}.b ",
+    "1 + { a = 2, b = a + 3}.b",
     "1 + { a = 2, b = a + 3}.b && c",
     "1 + { a = 2, b = a + 3}",
     "{\n a = 1,\n b = a + a,\n c = a + b + c\n}.c",
@@ -46,10 +47,10 @@ examples =
     "{ x=1, y=2, z=3 } {delete z}",
     "{ x=1, y=2, z=3 } .x",
     "{ x=1, y=2, z=3 }.wwww",
-    "{ x=1, y=2, z=y } ",
-    "{ x=1, y=2, z={a=1, b=y} } ",
-    "{ x=1, y=2, z={a=1, b=a} } ",
-    "{ x=1, y=2, z={x=1, y=x} } ",
+    "{ x=1, y=2, z=y }",
+    "{ x=1, y=2, z={a=1, b=y} }",
+    "{ x=1, y=2, z={a=1, b=a} }",
+    "{ x=1, y=2, z={x=1, y=x} }",
     "{ a=1, b={ x=2, y=3 } } { b = b { y = y + x + a } }",
     "{ a=1, b={ x=2, y=3 } } { b { y = y + x + a } }",
     "{ x = 1, y = 2, z = { a = x + 1, b = y + a + 2}}.z.b",
@@ -208,7 +209,7 @@ examples =
 
 main :: IO ()
 main = forM_ examples $ \s -> do
-  putStrLn "QCL:\n\n```"
+  putStrLn "\nQCL:\n\n```"
   TIO.putStrLn s
   putStrLn "```"
   case evalQCL s of
@@ -218,6 +219,6 @@ main = forM_ examples $ \s -> do
       putStrLn "```\n"
     Left e -> do
       putStrLn "\nError message:\n```"
-      TIO.putStrLn e
+      BL.putStrLn (encodeUtf8 e)
       putStrLn "```\n"
-  putStrLn "------------\n"
+  putStrLn "------------"

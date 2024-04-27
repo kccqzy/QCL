@@ -17,7 +17,6 @@ import Control.Monad.Trans.Class
 import Control.Monad.Trans.Reader
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as AesonMap
-import qualified Data.ByteString.Lazy as BL
 import Data.Char (isAlpha, isAlphaNum, isDigit, isSpace)
 import Data.Foldable
 import Data.Functor
@@ -29,7 +28,9 @@ import Data.Scientific (fromFloatDigits)
 import Data.Semigroup (Max (..))
 import Data.Text (Text)
 import qualified Data.Text as T
-import Data.Text.Encoding (decodeUtf8Lenient)
+import qualified Data.Text.Lazy as TL
+import qualified Data.Text.Lazy.Builder as TLB
+import Data.Text.Lazy.Encoding (decodeUtf8)
 import qualified Data.Text.Read as TR
 import Data.Vector (fromList)
 import qualified Text.Earley as E
@@ -324,36 +325,37 @@ parser = E.parser expr
 
 data ParseErrorLocation = EOF | Loc (Int, Int)
 
-data ParseError = ParseError ParseErrorLocation Text
+data ParseError = ParseError ParseErrorLocation TLB.Builder
 
-parseQCL :: Text -> Either Text PositionedExpr
+parseQCL :: Text -> Either TL.Text PositionedExpr
 parseQCL t = case E.fullParses parser (tokenize t) of
   (results, E.Report {..}) -> case results of
     [x] -> Right x
     [] -> Left $
       printError $ case (expected, unconsumed) of
         ([], []) -> error "internal error: no parse result but no expected/unconsumed"
-        (_ : _, []) -> ParseError EOF ("unexpected EOF; expecting " <> T.intercalate ", " expected)
-        ([], Positioned b _ tok : _) -> ParseError (Loc b) ("expecting EOF; found \"" <> tok <> "\"")
-        (_ : _, Positioned b _ tok : _) -> ParseError (Loc b) ("expecting " <> T.intercalate ", " expected <> ", found \"" <> tok <> "\"")
+        (_ : _, []) -> ParseError EOF ("unexpected EOF; expecting " <> TLB.fromText (T.intercalate ", " expected))
+        ([], Positioned b _ tok : _) -> ParseError (Loc b) ("expecting EOF; found \"" <> TLB.fromText tok <> "\"")
+        (_ : _, Positioned b _ tok : _) -> ParseError (Loc b) ("expecting " <> TLB.fromText (T.intercalate ", " expected) <> ", found \"" <> TLB.fromText tok <> "\"")
     (p1 : p2 : _) -> error $ "internal error: ambiguous grammar: found " ++ show p1 ++ " and " ++ show p2
   where
     tl = T.lines t
-    printError (ParseError pel msg) =
-      "parse error:\n" <> errorContext
+    printError :: ParseError -> TL.Text
+    printError (ParseError pel msg) = TLB.toLazyText("parse error:\n" <> errorContext)
       where
         errorContext =
           case pel of
             EOF -> "    " <> msg <> "\n"
             Loc (l, c) ->
               let lineno = T.pack (show l)
-                  linenoSpace = T.replicate (T.length lineno) " "
+                  linenoSpace = TLB.fromText (T.replicate (T.length lineno) " ")
                   gutter = " | "
+                  gutterInitial = linenoSpace <> " |\n"
                   gutterEmpty = linenoSpace <> gutter
-                  gutterLine = lineno <> gutter
+                  gutterLine = TLB.fromText lineno <> gutter
                   origLine = tl !! (l - 1)
-                  spaces = T.replicate (c - 1) " "
-               in gutterEmpty <> "\n" <> gutterLine <> origLine <> "\n" <> gutterEmpty <> spaces <> "^ " <> msg <> "\n"
+                  spaces = TLB.fromText (T.replicate (c - 1) " ")
+               in gutterInitial <> gutterLine <> TLB.fromText origLine <> "\n" <> gutterEmpty <> spaces <> "^ " <> msg <> "\n"
 
 data Value
   = NumberValue Double
@@ -722,7 +724,7 @@ intoAbstractTupleValueFromExprUpdate initial texprs capturedEnvironment =
       newFields <- M.alterF alterer (pValue label) fs
       pure atv {atvFields = newFields}
 
-evalQCL :: Text -> Either Text Value
+evalQCL :: Text -> Either TL.Text Value
 evalQCL text = do
   parsed <- parseQCL text
   case runReaderT (evalExpr parsed) [] of
@@ -730,10 +732,10 @@ evalQCL text = do
     Left e -> Left (printError e)
   where
     textLines = T.lines text
-    printError :: EvalError -> Text
-    printError ee =
-      "error:\n    " <> msg
+    printError :: EvalError -> TL.Text
+    printError ee = TLB.toLazyText ("error:\n    " <> msg)
       where
+        msg :: TLB.Builder
         msg = case ee of
           TypeError pe detail ->
             "unexpected type for expression\n" <> explainContext pe ("expecting " <> explainExpectedType detail)
@@ -760,7 +762,7 @@ evalQCL text = do
             -- distinguishing between different labels of the same name. Will
             -- require a bit more refactoring in order to implement it.
             "private fields cannot be used in abstract tuples\n" <> explainContext private "private here"
-        escapedText (Positioned {pValue = t}) = T.pack (show t)
+        escapedText (Positioned {pValue = t}) = TLB.fromString (show t)
         explainExpectedType detail = case detail of
           ExpectBoolean -> "boolean"
           ExpectNumberOrBoolean -> "number or boolean"
@@ -768,14 +770,14 @@ evalQCL text = do
           ExpectAbstractTuple -> "abstract tuple"
         explainTuple tp = case M.toList tp of
           [] -> "tuple is empty"
-          [(a, _)] -> "tuple has sole label " <> a
+          [(a, _)] -> "tuple has sole label " <> TLB.fromString (show a)
           v ->
             let shortened5 = map (T.pack . show . fst) (take 5 v)
                 shortened4 = take 4 shortened5
-             in "tuple has labels " <> T.intercalate ", " shortened4 <> (if length shortened5 == 5 then ", ..." else mempty)
-        explainVariable :: Down (Positioned a) -> Value -> Text
-        explainVariable (Down name) val = explainContext name ("this has value " <> (decodeUtf8Lenient (BL.toStrict (Aeson.encode val))))
-        explainContext :: Positioned a -> Text -> Text
+             in "tuple has labels " <> TLB.fromText (T.intercalate ", " shortened4) <> (if length shortened5 == 5 then ", ..." else mempty)
+        explainVariable :: Down (Positioned a) -> Value -> TLB.Builder
+        explainVariable (Down name) val = explainContext name ("this has value " <> TLB.fromLazyText (decodeUtf8 (Aeson.encode val)))
+        explainContext :: Positioned a -> TLB.Builder -> TLB.Builder
         explainContext Positioned {pBegin = (bl, bc), pEnd = (el, ec)} explanation =
           let contextLines = drop (bl - 1) (take el (zip [(1 :: Int) ..] textLines))
               contextLinesWithColumns =
@@ -790,20 +792,20 @@ evalQCL text = do
                   )
               gutter = " | "
               lastLineno = T.pack (show el)
-              gutterEmpty = T.replicate (T.length lastLineno) " " <> gutter
+              gutterEmpty = TLB.fromText (T.replicate (T.length lastLineno) " ") <> gutter
+              gutterInitial = TLB.fromText (T.replicate (T.length lastLineno) " ") <> " |\n"
               makeGutter n =
                 let ns = T.pack (show n)
-                 in T.replicate (T.length lastLineno - T.length ns) " " <> ns <> gutter
-           in gutterEmpty
-                <> "\n"
-                <> foldMap'
+                 in TLB.fromText (T.replicate (T.length lastLineno - T.length ns) " ") <> TLB.fromText ns <> gutter
+           in gutterInitial
+                <> foldMap
                   ( \((lineno, line), (columnBegin, columnEnd)) ->
                       makeGutter lineno
-                        <> line
+                        <> TLB.fromText line
                         <> "\n"
                         <> gutterEmpty
-                        <> T.replicate (columnBegin - 1) " "
-                        <> T.replicate (columnEnd - columnBegin) "^"
+                        <> TLB.fromText (T.replicate (columnBegin - 1) " ")
+                        <> TLB.fromText (T.replicate (columnEnd - columnBegin) "^")
                         <> (if lineno == el then " " <> explanation else mempty)
                         <> "\n"
                   )
