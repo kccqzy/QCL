@@ -751,7 +751,7 @@ error:
 QCL:
 
 ```
-# Abstract tuples are not eagerly evaluated.
+# Abstract tuples are not automatically evaluated. It is not evaluated here.
 abstract {
   abstract a,
   assert (a % 2 == 0),
@@ -770,7 +770,7 @@ null
 QCL:
 
 ```
-# Abstract tuple updates are also not eagerly evaluated.
+# Abstract tuple updates are also not automatically evaluated. It is not evaluated here.
 abstract {
   abstract a,
   assert (a % 2 == 0),
@@ -789,12 +789,12 @@ null
 QCL:
 
 ```
+# The abstract tuple must be evaluated explicitly using the eval keyword.
 abstract {
   abstract a,
   assert (a % 2 == 0),
   ret = a / 2,
-} { a = 42 }
-.eval
+} { a = 42 }.eval
 ```
 
 JSON result:
@@ -832,6 +832,7 @@ QCL:
 {
   checkEven = abstract {
     abstract a,
+    # This will fail.
     assert(a % 2 == 0),
     ret = a / 2,
   },
@@ -844,10 +845,10 @@ Error message:
 error:
     assertion failed
   |
-4 |     assert(a % 2 == 0),
+5 |     assert(a % 2 == 0),
   |            ^^^^^^^^^^ evaluates to false
   |
-4 |     assert(a % 2 == 0),
+5 |     assert(a % 2 == 0),
   |            ^ this has value 105
 
 ```
@@ -861,7 +862,11 @@ abstract {
   abstract a,
   assert (a % 2 == 0),
   ret = a / 2,
-} { a = 42 } { a = 64 }.eval
+} {
+  a = 42
+} {
+  a = 64
+}.eval # Evaluation happens only after both tuple updates.
 ```
 
 JSON result:
@@ -876,7 +881,12 @@ QCL:
 
 ```
 # Variables in abstract tuples can refer to the surrounding scope (lexical scope).
-{a = 1, b = abstract{c = a}.eval, assert (b.c==a)}
+{ a = 1,
+  b = abstract {
+    c = a
+  }.eval,
+  assert (b.c==a)
+}
 ```
 
 JSON result:
@@ -891,7 +901,14 @@ QCL:
 
 ```
 # Variables in abstract tuple updates can also refer to the surrounding scope.
-{a = 1, b = abstract{abstract c}}{b = b{c = a}.eval, assert (b.c==a)}
+{ a = 1,
+  b = abstract {
+    abstract c
+  }
+} {
+  b = b {c = a}.eval,
+  assert (b.c==a)
+}
 ```
 
 JSON result:
@@ -906,7 +923,16 @@ QCL:
 
 ```
 # Variables in abstract tuple updates refer to the value upon the update, not during evaluation.
-{a = 1, b = abstract{abstract c}}{b {c = a}, a = a + a, b = b.eval, assert (b.c!=a)}
+{ a = 1,
+  b = abstract {
+    abstract c
+  }
+} {
+  b {c = a}, # This `a` is 1.
+  a = a + a, # `a` becomes 2
+  b = b.eval, # Evaluation of `b` uses the `a` whose value is 1.
+  assert (b.c!=a)
+}
 ```
 
 JSON result:
@@ -922,11 +948,11 @@ QCL:
 ```
 abstract{
   abstract a,
-  b= abstract{
+  b = abstract{
     abstract x,
-    ret= x*10
+    ret = x*10,
   },
-  ret= a+b{x=a*100}.eval.ret
+  ret = a + b { x = a * 100}.eval.ret
 } { a = 5 }.eval.ret
 ```
 
@@ -934,51 +960,6 @@ JSON result:
 
 ```
 5005
-```
-
-------------
-
-QCL:
-
-```
-{assert(1004==abstract{
-  abstract a,
-  b= abstract{
-    abstract x,
-    ret= x*10
-  },
-  ret= a+b{x=a*100}.eval.ret
-} { a = 5 }.eval.ret)}
-```
-
-Error message:
-```
-error:
-    assertion failed
-  |
-1 | {assert(1004==abstract{
-  |         ^^^^^^^^^^^^^^^
-2 |   abstract a,
-  | ^^^^^^^^^^^^^
-3 |   b= abstract{
-  | ^^^^^^^^^^^^^^
-4 |     abstract x,
-  | ^^^^^^^^^^^^^^^
-5 |     ret= x*10
-  | ^^^^^^^^^^^^^
-6 |   },
-  | ^^^^
-7 |   ret= a+b{x=a*100}.eval.ret
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-8 | } { a = 5 }.eval.ret)}
-  | ^^^^^^^^^^^^^^^^^^^^ evaluates to false
-  |
-8 | } { a = 5 }.eval.ret)}
-  |                  ^^^ this has value 5005
-  |
-8 | } { a = 5 }.eval.ret)}
-  |             ^^^^ this has value {"a":5,"b":null,"ret":5005}
-
 ```
 
 ------------
@@ -1036,6 +1017,38 @@ error:
 1 | {a=2, b = abstract { abstract c, assert (c%a == 0) }} { b = b { c = 11 }.eval }
   |                                          ^ this has value 11
 
+```
+
+------------
+
+QCL:
+
+```
+# This example showcases Church-encoded booleans in an untyped lambda calculus.
+{
+  t = abstract { abstract a, abstract b, ret = a },
+  f = abstract { abstract a, abstract b, ret = b },
+
+  # Boolean and
+  and = abstract { abstract p, abstract q, ret = p { a = q, b = p }},
+  trueAndFalse  = and { p = t, q = f }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
+  falseAndTrue  = and { p = f, q = t }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
+  trueAndTrue   = and { p = t, q = t }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
+  falseAndFalse = and { p = f, q = f }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
+
+  # Boolean or
+  or = abstract { abstract p, abstract q, ret = p { a = p, b = q }},
+  trueOrFalse  = or { p = t, q = f }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
+  falseOrTrue  = or { p = f, q = t }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
+  trueOrTrue   = or { p = t, q = t }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
+  falseOrFalse = or { p = f, q = f }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
+} { delete t, delete f, delete and, delete or }
+```
+
+JSON result:
+
+```
+{"falseAndFalse":false,"falseAndTrue":false,"falseOrFalse":false,"falseOrTrue":true,"trueAndFalse":false,"trueAndTrue":true,"trueOrFalse":true,"trueOrTrue":true}
 ```
 
 ------------

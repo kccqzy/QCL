@@ -42,7 +42,8 @@ executable configlang-examples
         configlang,
         aeson ^>= 2.2,
         text ^>= 2.1,
-        bytestring ^>= 0.12
+        bytestring ^>= 0.12,
+        neat-interpolation ^>= 0.5
 
     hs-source-dirs:   examples
     default-language: Haskell2010

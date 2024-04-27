@@ -1,7 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE QuasiQuotes #-}
 
 module Main (main) where
 
+import NeatInterpolation (text)
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy.Char8 as BL
 import Data.Foldable (forM_)
@@ -56,52 +58,132 @@ examples =
     "{ final\n  meaningOfLife = 42 } { delete meaningOfLife }",
     "{ abstract a }",
     "{}.eval",
-    "# Abstract tuples are not eagerly evaluated.\nabstract {\n  abstract a,\n  assert (a % 2 == 0),\n  ret = a / 2,\n}",
-    "# Abstract tuple updates are also not eagerly evaluated.\nabstract {\n  abstract a,\n  assert (a % 2 == 0),\n  ret = a / 2,\n} { a = 42 }",
-    "abstract {\n  abstract a,\n  assert (a % 2 == 0),\n  ret = a / 2,\n} { a = 42 }\n.eval",
-    "{\n\
-    \  checkEven = abstract {\n\
-    \    abstract a,\n\
-    \    assert(a % 2 == 0),\n\
-    \    ret = a / 2,\n\
-    \  },\n\
-    \  e1 = checkEven { a = 100 },\n\
-    \} { e1 = e1.eval.ret, delete checkEven }",
-    "{\n\
-    \  checkEven = abstract {\n\
-    \    abstract a,\n\
-    \    assert(a % 2 == 0),\n\
-    \    ret = a / 2,\n\
-    \  },\n\
-    \  e1 = checkEven { a = 105 },\n\
-    \} { e1 = e1.eval.ret, delete checkEven }",
-    "abstract {\n  abstract a,\n  assert (a % 2 == 0),\n  ret = a / 2,\n} { a = 42 } { a = 64 }.eval",
-    "# Variables in abstract tuples can refer to the surrounding scope (lexical scope).\n\
-    \{a = 1, b = abstract{c = a}.eval, assert (b.c==a)}",
-    "# Variables in abstract tuple updates can also refer to the surrounding scope.\n\
-    \{a = 1, b = abstract{abstract c}}{b = b{c = a}.eval, assert (b.c==a)}",
-    "# Variables in abstract tuple updates refer to the value upon the update, not during evaluation.\n\
-    \{a = 1, b = abstract{abstract c}}{b {c = a}, a = a + a, b = b.eval, assert (b.c!=a)}",
-    "abstract{\n\
-    \  abstract a,\n\
-    \  b= abstract{\n\
-    \    abstract x,\n\
-    \    ret= x*10\n\
-    \  },\n\
-    \  ret= a+b{x=a*100}.eval.ret\n\
-    \} { a = 5 }.eval.ret",
-    "{assert(1004==abstract{\n\
-    \  abstract a,\n\
-    \  b= abstract{\n\
-    \    abstract x,\n\
-    \    ret= x*10\n\
-    \  },\n\
-    \  ret= a+b{x=a*100}.eval.ret\n\
-    \} { a = 5 }.eval.ret)}",
-    "# Mutual reference is not allowed\n\
-    \abstract { abstract a, b = a+1 } { a = b+1 } .eval",
+    [text|
+          # Abstract tuples are not automatically evaluated. It is not evaluated here.
+          abstract {
+            abstract a,
+            assert (a % 2 == 0),
+            ret = a / 2,
+          }
+         |],
+    [text|
+          # Abstract tuple updates are also not automatically evaluated. It is not evaluated here.
+          abstract {
+            abstract a,
+            assert (a % 2 == 0),
+            ret = a / 2,
+          } { a = 42 }
+         |],
+    [text|
+         # The abstract tuple must be evaluated explicitly using the eval keyword.
+         abstract {
+           abstract a,
+           assert (a % 2 == 0),
+           ret = a / 2,
+         } { a = 42 }.eval
+         |],
+    [text|
+          {
+            checkEven = abstract {
+              abstract a,
+              assert(a % 2 == 0),
+              ret = a / 2,
+            },
+            e1 = checkEven { a = 100 },
+          } { e1 = e1.eval.ret, delete checkEven }
+         |],
+    [text|
+          {
+            checkEven = abstract {
+              abstract a,
+              # This will fail.
+              assert(a % 2 == 0),
+              ret = a / 2,
+            },
+            e1 = checkEven { a = 105 },
+          } { e1 = e1.eval.ret, delete checkEven }
+         |],
+    [text|
+         abstract {
+           abstract a,
+           assert (a % 2 == 0),
+           ret = a / 2,
+         } {
+           a = 42
+         } {
+           a = 64
+         }.eval # Evaluation happens only after both tuple updates.
+         |],
+    [text|
+         # Variables in abstract tuples can refer to the surrounding scope (lexical scope).
+         { a = 1,
+           b = abstract {
+             c = a
+           }.eval,
+           assert (b.c==a)
+         }
+         |],
+    [text|
+         # Variables in abstract tuple updates can also refer to the surrounding scope.
+         { a = 1,
+           b = abstract {
+             abstract c
+           }
+         } {
+           b = b {c = a}.eval,
+           assert (b.c==a)
+         }
+         |],
+    [text|
+          # Variables in abstract tuple updates refer to the value upon the update, not during evaluation.
+          { a = 1,
+            b = abstract {
+              abstract c
+            }
+          } {
+            b {c = a}, # This `a` is 1.
+            a = a + a, # `a` becomes 2
+            b = b.eval, # Evaluation of `b` uses the `a` whose value is 1.
+            assert (b.c!=a)
+          }
+         |],
+    [text|
+          abstract{
+            abstract a,
+            b = abstract{
+              abstract x,
+              ret = x*10,
+            },
+            ret = a + b { x = a * 100}.eval.ret
+          } { a = 5 }.eval.ret
+          |],
+    [text|
+        # Mutual reference is not allowed
+        abstract { abstract a, b = a+1 } { a = b+1 } .eval
+         |],
     "{a=2, b = abstract { abstract c, assert (c%a == 0) }} { b = b { c = 10 }.eval }",
-    "{a=2, b = abstract { abstract c, assert (c%a == 0) }} { b = b { c = 11 }.eval }"
+    "{a=2, b = abstract { abstract c, assert (c%a == 0) }} { b = b { c = 11 }.eval }",
+    [text|
+         # This example showcases Church-encoded booleans in an untyped lambda calculus.
+         {
+           t = abstract { abstract a, abstract b, ret = a },
+           f = abstract { abstract a, abstract b, ret = b },
+
+           # Boolean and
+           and = abstract { abstract p, abstract q, ret = p { a = q, b = p }},
+           trueAndFalse  = and { p = t, q = f }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
+           falseAndTrue  = and { p = f, q = t }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
+           trueAndTrue   = and { p = t, q = t }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
+           falseAndFalse = and { p = f, q = f }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
+
+           # Boolean or
+           or = abstract { abstract p, abstract q, ret = p { a = p, b = q }},
+           trueOrFalse  = or { p = t, q = f }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
+           falseOrTrue  = or { p = f, q = t }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
+           trueOrTrue   = or { p = t, q = t }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
+           falseOrFalse = or { p = f, q = f }.eval.ret.eval.ret{a=true,b=false}.eval.ret,
+         } { delete t, delete f, delete and, delete or }
+         |]
   ]
 
 main :: IO ()
