@@ -35,6 +35,7 @@ examples =
     "{private x = true, y = x + 1} { x = false }",
     "{private x = true, y = x + 1} { delete x }",
     "{private x = true, y = x + 1}.x",
+    "{private x = true} { private x = false}",
     "{x = true,\n assert(true), }",
     "{x = 5, assert(x % 2\n==\n0), }",
     "{x = 2,\n x = 1}",
@@ -169,10 +170,60 @@ examples =
         # Mutual reference is not allowed
         abstract { abstract a, b = a+1 } { a = b+1 } .eval
          |],
+    [text|
+         # Abstract tuples delay evaluation. They allow but do not require abstract fields.
+         abstract {
+           x = 0,
+           y = 0,
+           ret = x * y,  # ret is evaluated after the overriding x and y
+         } {
+           x = 2,
+           y = 4,
+         }.eval
+         |],
+    [text|
+         abstract {
+           x = 2,
+           y = 4,
+           ret = x * y,
+         } {
+           # Will not work because the previous value of x does not exist yet.
+           x += 1,
+         }.eval
+         |],
+    [text|
+         abstract {
+           x = 2,
+           y = 4,
+           ret = x * y,
+         }.eval {
+           # Works.
+           x += 1,
+         }
+         |],
     "{a=2, b = abstract { abstract c, assert (c%a == 0) }} { b = b { c = 10 }.eval }",
     "{a=2, b = abstract { abstract c, assert (c%a == 0) }} { b = b { c = 11 }.eval }",
     "abstract { abstract x, private y = x + x, z = y * y } { x = 10 }.eval",
     "abstract { abstract x, private y = x + x } { x = 10 }.eval.y",
+    [text|
+         # It is possible to mark an overridden field private. It is orthogonal
+         # to the evaluation order.
+         abstract {
+           abstract x,
+           ret = x * x,
+         } {
+           private x = 10,
+         }.eval
+         |],
+    [text|
+         # It is also possible to mark an overridden field final.
+         abstract {
+           abstract x,
+           ret = x * x,
+         } {
+           final x = 10,
+         }.eval
+         |],
     [text|
          # This example showcases Church-encoded booleans in an untyped lambda calculus.
          {

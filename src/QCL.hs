@@ -386,7 +386,6 @@ data AbstractTupleValueRow
   { atprDefinitionLoc :: PositionedText,
     atprValue :: PositionedRowExpr,
     atprEvalOrder :: Int,
-    atprEvalOrderBehavior :: EvalOrderBehavior,
     atprCapturedEnvironment :: EvalEnvironment
   }
   deriving (Show)
@@ -404,9 +403,6 @@ data AbstractTupleValue
   { atvFields :: M.Map Text AbstractTupleValueRow,
     atvAssertions :: [AbstractTupleValueAssertion]
   }
-  deriving (Show)
-
-data EvalOrderBehavior = EvalOrderKeep | EvalOrderUpdate
   deriving (Show)
 
 instance Aeson.ToJSON Value where
@@ -695,11 +691,7 @@ intoAbstractTupleValueFromExprUpdate initial texprs =
               { atprDefinitionLoc = label,
                 atprValue = rowExpr,
                 atprEvalOrder = order,
-                atprCapturedEnvironment = capturedEnvironment,
-                atprEvalOrderBehavior =
-                  case pValue rowExpr of
-                    AbstractRow -> EvalOrderKeep
-                    _ -> EvalOrderUpdate
+                atprCapturedEnvironment = capturedEnvironment
               }
           alterer :: Maybe AbstractTupleValueRow -> Either EvalError (Maybe AbstractTupleValueRow)
           alterer orig =
@@ -708,17 +700,12 @@ intoAbstractTupleValueFromExprUpdate initial texprs =
                 case pValue pAttr of
                   RowFinal -> Left (FinalRowOverrideError label prevDef (void pAttr))
                   RowPrivate -> Left (PrivateRowAccessError label prevDef (void pAttr))
-              Just (AbstractTupleValueRow {atprDefinitionLoc = prevLabel})
+              Just AbstractTupleValueRow {atprDefinitionLoc = prevLabel}
                 | M.notMember (pValue label) (atvFields initial) ->
                     Left (DuplicateLabelError label prevLabel)
-              Just
-                ( AbstractTupleValueRow
-                    { atprEvalOrder = oldOrder,
-                      atprEvalOrderBehavior = EvalOrderKeep
-                    }
-                  ) ->
-                  pure (Just newValue {atprEvalOrder = oldOrder, atprEvalOrderBehavior = EvalOrderKeep})
-              _ ->
+              Just AbstractTupleValueRow {atprEvalOrder = oldOrder} ->
+                pure (Just newValue {atprEvalOrder = oldOrder})
+              Nothing ->
                 pure (Just newValue)
       newFields <- lift (M.alterF alterer (pValue label) fs)
       pure atv {atvFields = newFields}

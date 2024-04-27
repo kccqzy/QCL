@@ -368,6 +368,30 @@ error:
 QCL:
 
 ```
+{private x = true} { private x = false}
+```
+
+Error message:
+```
+error:
+    field marked as private cannot be accessed outside its enclosing tuple
+  |
+1 | {private x = true} { private x = false}
+  |                              ^ access of private field here
+  |
+1 | {private x = true} { private x = false}
+  |          ^ defined here
+  |
+1 | {private x = true} { private x = false}
+  |  ^^^^^^^ marked as private here
+
+```
+
+------------
+
+QCL:
+
+```
 {x = true,
  assert(true), }
 ```
@@ -1128,6 +1152,74 @@ error:
 QCL:
 
 ```
+# Abstract tuples delay evaluation. They allow but do not require abstract fields.
+abstract {
+  x = 0,
+  y = 0,
+  ret = x * y,  # ret is evaluated after the overriding x and y
+} {
+  x = 2,
+  y = 4,
+}.eval
+```
+
+JSON result:
+
+```
+{"ret":8,"x":2,"y":4}
+```
+
+------------
+
+QCL:
+
+```
+abstract {
+  x = 2,
+  y = 4,
+  ret = x * y,
+} {
+  # Will not work because the previous value of x does not exist yet.
+  x += 1,
+}.eval
+```
+
+Error message:
+```
+error:
+    variable reference "x" does not exist
+  |
+7 |   x += 1,
+  |   ^ undefined variable reference
+
+```
+
+------------
+
+QCL:
+
+```
+abstract {
+  x = 2,
+  y = 4,
+  ret = x * y,
+}.eval {
+  # Works.
+  x += 1,
+}
+```
+
+JSON result:
+
+```
+{"ret":8,"x":3,"y":4}
+```
+
+------------
+
+QCL:
+
+```
 {a=2, b = abstract { abstract c, assert (c%a == 0) }} { b = b { c = 10 }.eval }
 ```
 
@@ -1197,6 +1289,47 @@ error:
 1 | abstract { abstract x, private y = x + x } { x = 10 }.eval.y
   |                        ^^^^^^^ marked as private here
 
+```
+
+------------
+
+QCL:
+
+```
+# It is possible to mark an overridden field private. It is orthogonal
+# to the evaluation order.
+abstract {
+  abstract x,
+  ret = x * x,
+} {
+  private x = 10,
+}.eval
+```
+
+JSON result:
+
+```
+{"ret":100}
+```
+
+------------
+
+QCL:
+
+```
+# It is also possible to mark an overridden field final.
+abstract {
+  abstract x,
+  ret = x * x,
+} {
+  final x = 10,
+}.eval
+```
+
+JSON result:
+
+```
+{"ret":100,"x":10}
 ```
 
 ------------
