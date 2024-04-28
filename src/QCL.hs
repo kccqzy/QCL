@@ -545,14 +545,14 @@ lookupVariable :: PositionedText -> VariableLookupScope -> Eval Value
 lookupVariable p scope = ReaderT $ \case
   [] -> Left (TopLevelVariableError p)
   InsideTupleEnv {..} : outer ->
-    case M.lookup (pValue p) eCurrentTuple of
-      Nothing -> case scope of
-        VariableLookupCurrentScope -> Left (NonExistentVariableInCurrentScopeError p)
-        VariableLookupAllScopes ->
-          case runReaderT (lookupVariable p scope) outer of
-            Left (TopLevelVariableError _) -> Left (NonExistentVariableError p)
-            r -> r
-      Just TupleValueRow {..} ->
+    case (M.lookup (pValue p) eCurrentTuple, scope) of
+      (Nothing, VariableLookupCurrentScope) -> Left (NonExistentVariableInCurrentScopeError p)
+      (Nothing, VariableLookupAllScopes) ->
+        case runReaderT (lookupVariable p scope) outer of
+          Left (TopLevelVariableError _) -> Left (NonExistentVariableError p)
+          r -> r
+      (Just TupleValueRow {..}, VariableLookupCurrentScope) -> pure tprValue
+      (Just TupleValueRow {..}, VariableLookupAllScopes) ->
         case lookupVariableDefOnce outer of
           Just secondDef -> Left (AmbiguousVariableError p tprDefitionLoc secondDef)
           Nothing -> pure tprValue

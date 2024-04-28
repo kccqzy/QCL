@@ -58,8 +58,16 @@ examples =
     "{ x=1, y=2, z={x=1, y=x} }",
     "{ inner = { private x = 1, y = 2 }, result = inner.x }",
     "{ private x = 1, inner = { y = 2 + x } }",
-    "{ a=1, b={ x=2, y=3 } } { b = b { y = y + x + a } }",
-    "{ a=1, b={ x=2, y=3 } } { b { y = y + x + a } }",
+    "# A convenient syntax for nested tuple updates.\n{ a=1, b={ x=2, y=3 } } { b { y = 100 } }",
+    [text|
+         { z = { irrelevant = 1000 },
+           inner = {
+             z = { x = 0 }
+           } {
+             z { x += 1 } # This z updates the field in the current tuple, not the outside one.
+           }
+         }
+         |],
     "{ x = 1, y = 2, z = { a = x + 1, b = y + a + 2}}.z.b",
     "{ a=1, b=2 } { a=b+1 } { b=a+1 } { a=b+1 } { b=a+1 }",
     "{ final meaningOfLife = 42 } { meaningOfLife = 43 }",

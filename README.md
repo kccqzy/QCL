@@ -763,13 +763,14 @@ JSON result:
 QCL:
 
 ```
-{ a=1, b={ x=2, y=3 } } { b = b { y = y + x + a } }
+# A convenient syntax for nested tuple updates.
+{ a=1, b={ x=2, y=3 } } { b { y = 100 } }
 ```
 
 JSON result:
 
 ```
-{"a":1,"b":{"x":2,"y":6}}
+{"a":1,"b":{"x":2,"y":100}}
 ```
 
 ------------
@@ -777,13 +778,19 @@ JSON result:
 QCL:
 
 ```
-{ a=1, b={ x=2, y=3 } } { b { y = y + x + a } }
+{ z = { irrelevant = 1000 },
+  inner = {
+    z = { x = 0 }
+  } {
+    z { x += 1 } # This z updates the field in the current tuple, not the outside one.
+  }
+}
 ```
 
 JSON result:
 
 ```
-{"a":1,"b":{"x":2,"y":6}}
+{"inner":{"z":{"x":1}},"z":{"irrelevant":1000}}
 ```
 
 ------------
