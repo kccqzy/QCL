@@ -497,7 +497,7 @@ error:
     unexpected type for expression
   |
 1 | 1 + { a = 2, b = a + 3}
-  |     ^^^^^^^^^^^^^^^^^^^ expecting number or boolean
+  |     ^^^^^^^^^^^^^^^^^^^ expecting number or boolean, found tuple
 
 ```
 
@@ -908,7 +908,7 @@ error:
     unexpected type for expression
   |
 1 | {}.eval
-  | ^^ expecting abstract tuple
+  | ^^ expecting abstract tuple, found tuple
 
 ```
 

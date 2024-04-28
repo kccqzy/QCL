@@ -421,7 +421,8 @@ instance Aeson.ToJSON Value where
   toJSON (AbstractTupleValue {}) = Aeson.Null
 
 data EvalError
-  = TypeError PositionedExpr TypeErrorDetail
+  = -- | A type error is encountered, with the expression, the actual value and the expected type.
+    TypeError PositionedExpr Value TypeErrorDetail
   | -- | A tuple definition has a duplicate label.
     DuplicateLabelError PositionedText PositionedText
   | -- | Assertion failed. Variables inside the assertions are reported.
@@ -467,7 +468,7 @@ evalNumeric pexpr = do
     NumberValue n -> pure n
     BooleanValue True -> pure 1
     BooleanValue False -> pure 0
-    _ -> lift (Left (TypeError pexpr ExpectNumberOrBoolean))
+    _ -> lift (Left (TypeError pexpr val ExpectNumberOrBoolean))
 
 evalNumericFunc1 :: (Double -> Double) -> PositionedExpr -> Eval Value
 evalNumericFunc1 f a = (NumberValue . f) <$> evalNumeric a
@@ -511,7 +512,7 @@ evalExpr pexpr =
       case orig of
         TupleValue t -> evalTupleExprs t (pValue updates)
         AbstractTupleValue t -> AbstractTupleValue <$> intoAbstractTupleValueFromExprUpdate t (pValue updates)
-        _ -> lift $ Left (TypeError origVal ExpectTuple)
+        _ -> lift $ Left (TypeError origVal orig ExpectTuple)
     Member tuple label -> do
       tupleVal <- evalExpr tuple
       case tupleVal of
@@ -520,13 +521,13 @@ evalExpr pexpr =
           Just (TupleValueRow {tprDefitionLoc = prevDef, tprAttr = (Just privatePos@Positioned {pValue = RowPrivate})}) ->
             lift $ Left (PrivateRowAccessError label prevDef (void privatePos))
           Just (TupleValueRow {..}) -> pure tprValue
-        _ -> lift $ Left (TypeError tuple ExpectTuple)
+        _ -> lift $ Left (TypeError tuple tupleVal ExpectTuple)
     Var var scope -> lookupVariable var scope
     EvalAbstract tempExpr _ -> do
       tem <- evalExpr tempExpr
       case tem of
         AbstractTupleValue atv -> evalAbstractTuple atv
-        _ -> lift $ Left (TypeError tempExpr ExpectAbstractTuple)
+        _ -> lift $ Left (TypeError tempExpr tem ExpectAbstractTuple)
 
 lookupVariable :: PositionedText -> VariableLookupScope -> Eval Value
 lookupVariable p scope = ReaderT $ \case
@@ -596,7 +597,7 @@ evalAssertion assertion = do
     BooleanValue False -> do
       collectedVars <- collectVariables assertion
       lift $ Left (AssertionFailed assertion collectedVars)
-    _ -> lift $ Left (TypeError assertion ExpectBoolean)
+    _ -> lift $ Left (TypeError assertion val ExpectBoolean)
 
 collectVariables :: PositionedExpr -> Eval (M.Map (Down (Positioned ())) Value)
 collectVariables pexpr =
@@ -732,8 +733,8 @@ evalQCL text = do
       where
         msg :: TLB.Builder
         msg = case ee of
-          TypeError pe detail ->
-            "unexpected type for expression\n" <> explainContext pe ("expecting " <> explainExpectedType detail)
+          TypeError pe v detail ->
+            "unexpected type for expression\n" <> explainContext pe ("expecting " <> explainExpectedType detail <> ", found " <> explainActualType v)
           DuplicateLabelError l1 l2 ->
             "duplicate field label " <> escapedText l1 <> " in tuple\n" <> explainContext l1 "this definition" <> explainContext l2 "earlier definition"
           AssertionFailed pe vars ->
@@ -762,6 +763,12 @@ evalQCL text = do
           ExpectNumberOrBoolean -> "number or boolean"
           ExpectTuple -> "tuple"
           ExpectAbstractTuple -> "abstract tuple"
+        explainActualType v = case v of
+          NumberValue {} -> "number"
+          BooleanValue {} -> "boolean"
+          TupleValue {} -> "tuple"
+          AbstractTupleValue {} -> "abstract tuple"
+          ListValue {} -> "list"
         explainTuple tp = case M.toList tp of
           [] -> "tuple is empty"
           [(a, _)] -> "tuple has sole label " <> TLB.fromString (show a)
