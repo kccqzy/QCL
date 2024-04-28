@@ -470,24 +470,6 @@ JSON result:
 QCL:
 
 ```
-1 + { a = 2, b = a + 3}.b && c
-```
-
-Error message:
-```
-error:
-    variable reference "c" must be inside a tuple
-  |
-1 | 1 + { a = 2, b = a + 3}.b && c
-  |                              ^ top-level variable reference
-
-```
-
-------------
-
-QCL:
-
-```
 1 + { a = 2, b = a + 3}
 ```
 
@@ -874,6 +856,32 @@ error:
 1 | { final
   |   ^^^^^ marked as final here
 
+```
+
+------------
+
+QCL:
+
+```
+{
+  # Perl-style boolean operators.
+  oneOrTwo    = 1 || 2,
+  zeroOrTwo   = 0 || 2,
+  oneAndTwo   = 1 && 2,
+  zeroAndTwo  = 0 && 2,
+  # Substitute for the conditional operator.
+  ifTrue      = 1 && 100 || 200,
+  ifFalse     = 0 && 100 || 200,
+  # Short-circuiting. Even type errors are not found.
+  simplyFalse = false && (1+{}),
+  simplyTrue  = true  || (1+{}),
+}
+```
+
+JSON result:
+
+```
+{"ifFalse":200,"ifTrue":100,"oneAndTwo":2,"oneOrTwo":1,"simplyFalse":false,"simplyTrue":true,"zeroAndTwo":0,"zeroOrTwo":2}
 ```
 
 ------------

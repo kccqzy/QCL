@@ -470,6 +470,14 @@ evalNumeric pexpr = do
     BooleanValue False -> pure 0
     _ -> lift (Left (TypeError pexpr val ExpectNumberOrBoolean))
 
+evalBoolean :: PositionedExpr -> Eval (Bool, Value)
+evalBoolean pexpr = do
+  val <- evalExpr pexpr
+  case val of
+    NumberValue n -> pure (n /= 0, val)
+    BooleanValue b -> pure (b, val)
+    _ -> lift (Left (TypeError pexpr val ExpectNumberOrBoolean))
+
 evalNumericFunc1 :: (Double -> Double) -> PositionedExpr -> Eval Value
 evalNumericFunc1 f a = (NumberValue . f) <$> evalNumeric a
 
@@ -501,8 +509,12 @@ evalExpr pexpr =
     Ge a b -> evalNumericBoolFunc2 (>=) a b
     Eq a b -> evalNumericBoolFunc2 (==) a b
     Neq a b -> evalNumericBoolFunc2 (/=) a b
-    And a b -> evalNumericBoolFunc2 (\x y -> (x /= 0) && (y /= 0)) a b
-    Or a b -> evalNumericBoolFunc2 (\x y -> (x /= 0) || (y /= 0)) a b
+    And a b -> do
+      (leftBool, leftVal) <- evalBoolean a
+      if leftBool then evalExpr b else pure leftVal
+    Or a b -> do
+      (leftBool, leftVal) <- evalBoolean a
+      if leftBool then pure leftVal else evalExpr b
     Not a -> evalNumericBoolFunc1 (== 0) a
     List pes -> ListValue <$> traverse evalExpr pes
     Tuple tupleExprs -> evalTupleExprs M.empty tupleExprs

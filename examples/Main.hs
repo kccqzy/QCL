@@ -40,7 +40,6 @@ examples =
     "{x = 5, assert(x % 2\n==\n0), }",
     "{x = 2,\n x = 1}",
     "1 + { a = 2, b = a + 3}.b",
-    "1 + { a = 2, b = a + 3}.b && c",
     "1 + { a = 2, b = a + 3}",
     "{\n a = 1,\n b = a + a,\n c = a + b + c\n}.c",
     "[]",
@@ -65,6 +64,21 @@ examples =
     "{ a=1, b=2 } { a=b+1 } { b=a+1 } { a=b+1 } { b=a+1 }",
     "{ final meaningOfLife = 42 } { meaningOfLife = 43 }",
     "{ final\n  meaningOfLife = 42 } { delete meaningOfLife }",
+    [text|
+         {
+           # Perl-style boolean operators.
+           oneOrTwo    = 1 || 2,
+           zeroOrTwo   = 0 || 2,
+           oneAndTwo   = 1 && 2,
+           zeroAndTwo  = 0 && 2,
+           # Substitute for the conditional operator.
+           ifTrue      = 1 && 100 || 200,
+           ifFalse     = 0 && 100 || 200,
+           # Short-circuiting. Even type errors are not found.
+           simplyFalse = false && (1+{}),
+           simplyTrue  = true  || (1+{}),
+         }
+         |],
     "{ abstract a }",
     "{}.eval",
     [text|
