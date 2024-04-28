@@ -284,11 +284,12 @@ examples =
     [text|
           # The omega combinator. In lambda calculus, the omega combinator diverges (infinite
           # loop). But in this language, every abstract tuple evaluation must be explicit.
-          # Therefore, an infinite loop is impossible: it would take an infinitely long program!
+          # Therefore, by placing the eval at the right place, it is possible to see each
+          # stage of applying the omega combinator.
           {
             omega = abstract {
               abstract x,
-              ret = x { x = x }
+              ret = x { x = x } # This program would loop if the eval keyword is here.
             },
           } {
             omega { x = omega },
@@ -300,7 +301,22 @@ examples =
             o6 = omega.eval.ret.eval.ret.eval.ret.eval.ret.eval.ret.eval.ret,
             # Ad infitinum.
           }
-          |]
+          |],
+    [text|
+         {
+           # This implements a recursive function call using the well-known trick of
+           # having an argument to refer to the recursion and passing the function itself.
+           factorial = abstract {
+             abstract x,
+             abstract rec,
+             ret = x == 0 && 1 || x * rec { x = x - 1, rec = rec }.eval.ret
+           },
+         } {
+           final factorial { rec = factorial }
+         } {
+           f10 = factorial { x = 10 }.eval.ret
+         }
+         |]
   ]
 
 main :: IO ()

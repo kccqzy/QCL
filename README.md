@@ -2,17 +2,22 @@
 
 QCL is an experimental, dynamically typed "little language" (as defined by
 Chapter 6 of *The AWK Programming Language*) that produces JSON output. It is
-JSON but more convenient to write, and it allows a little bit of computation
-without being Turing complete.
+JSON but more convenient to write, and it allows a little bit of computation.
 
 # Motivation
 
 This project mainly exists because I want to play with a natural and intuitive
 (to me) syntax. I also want to play with [the Earley
 parser](https://en.wikipedia.org/wiki/Earley_parser) which is capable of parsing
-context-free languages. I also want to play with making named tuples (aka
-dictionaries, JS-style objects) a first-class citizen of the language, such that
-almost everything is built on top of it.
+context-free languages (I want my language to be strictly context-free after
+lexing). I also want to play with making named tuples (aka dictionaries,
+JS-style objects) a first-class citizen of the language, such that almost
+everything is built on top of it. The abstract tuple is a powerful feature
+whereby the evaluation of the tuple is delayed until such time intended by the
+user through the `eval` keyword. It can be thought of as providing a *template*
+tuple with values to be filled in later; it can also be thought of as
+introducing a lambda function where the values to be filled in are function
+arguments. These lambdas are closures and capture their environment.
 
 I also want to produce extremely helpful and detailed error messages, which
 sadly I usually don't get to do too often.
@@ -1427,11 +1432,12 @@ QCL:
 ```
 # The omega combinator. In lambda calculus, the omega combinator diverges (infinite
 # loop). But in this language, every abstract tuple evaluation must be explicit.
-# Therefore, an infinite loop is impossible: it would take an infinitely long program!
+# Therefore, by placing the eval at the right place, it is possible to see each
+# stage of applying the omega combinator.
 {
   omega = abstract {
     abstract x,
-    ret = x { x = x }
+    ret = x { x = x } # This program would loop if the eval keyword is here.
   },
 } {
   omega { x = omega },
@@ -1449,6 +1455,32 @@ JSON result:
 
 ```
 {"o1":null,"o2":null,"o3":null,"o4":null,"o5":null,"o6":null,"omega":null}
+```
+
+------------
+
+QCL:
+
+```
+{
+  # This implements a recursive function call using the well-known trick of
+  # having an argument to refer to the recursion and passing the function itself.
+  factorial = abstract {
+    abstract x,
+    abstract rec,
+    ret = x == 0 && 1 || x * rec { x = x - 1, rec = rec }.eval.ret
+  },
+} {
+  final factorial { rec = factorial }
+} {
+  f10 = factorial { x = 10 }.eval.ret
+}
+```
+
+JSON result:
+
+```
+{"f10":3628800,"factorial":null}
 ```
 
 ------------
