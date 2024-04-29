@@ -12,7 +12,6 @@ module QCL (Value, evalQCL) where
 
 import Control.Applicative
 import Control.Monad
-import Control.Monad.Fix
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.Reader
 import qualified Data.Aeson as Aeson
@@ -23,6 +22,7 @@ import Data.Functor
 import Data.List (sortBy, unfoldr)
 import qualified Data.Map.Lazy as ML
 import qualified Data.Map.Strict as M
+import Data.Maybe
 import Data.Monoid (First (..))
 import Data.Ord (Down (..), comparing)
 import Data.Scientific (fromFloatDigits)
@@ -147,7 +147,14 @@ between bra ket ps = do
   pure (fromPosition2 b k vs)
 
 sepEndBy :: E.Prod r e t a -> E.Prod r e t b -> E.Grammar r (E.Prod r e t [a])
-sepEndBy p sep = mfix (\rule -> E.rule $ (:) <$> p <*> ((sep *> rule) <|> pure []) <|> pure [])
+sepEndBy p sep = mdo
+  rule <-
+    E.rule $
+      pure [] <|> do
+        first <- p
+        subsequent <- optional (sep *> rule)
+        pure (first : fromMaybe [] subsequent)
+  pure rule
 
 (<$$) :: (Functor f, Functor g) => a -> f (g b) -> f (g a)
 a <$$ fgb = fmap (a <$) fgb
@@ -280,7 +287,7 @@ expr = mdo
   let tupleRow = tupleDeleteRow <|> tupleAbstractRow <|> tupleValueRow
 
   let tupleValueRow = do
-        attr <- pure Nothing <|> (Just <$> (RowFinal <$$ lit "final")) <|> (Just <$> (RowPrivate <$$ lit "private"))
+        attr <- optional (RowFinal <$$ lit "final" <|> RowPrivate <$$ lit "private")
         k <- E.terminal identifier E.<?> "identifier"
         let assignedValue = const <$> (lit "=" *> val)
         let updateSyntaxSugar =
