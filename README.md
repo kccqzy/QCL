@@ -1051,14 +1051,26 @@ abstract {
 } {
   a = 42
 } {
-  a = 64
-}.eval # Evaluation happens only after both tuple updates.
+  a = 64 # This override fails because abstract rows must be overridden exactly once.
+}.eval
 ```
 
-JSON result:
-
+Error message:
 ```
-{"a":64,"ret":32}
+error:
+    non-abstract field cannot be overridden in an abstract tuple
+        (consider first evaluating the abstract tuple into a tuple,
+        and then overriding this field)
+  |
+8 |   a = 64 # This override fails because abstract rows must be overridden exactly once.
+  |   ^ override of field here
+  |
+6 |   a = 42
+  |   ^ previous value defined here
+  |
+1 | abstract {
+  | ^^^^^^^^ tuple marked as abstract here
+
 ```
 
 ------------
@@ -1175,18 +1187,18 @@ QCL:
 # Abstract tuples delay evaluation. They allow but do not require abstract fields.
 abstract {
   x = 0,
-  y = 0,
-  ret = x * y,  # ret is evaluated after the overriding x and y
-} {
+  y = 1,
+  z = 2,
+}.eval {
   x = 2,
   y = 4,
-}.eval
+}
 ```
 
 JSON result:
 
 ```
-{"ret":8,"x":2,"y":4}
+{"x":2,"y":4,"z":2}
 ```
 
 ------------
@@ -1199,7 +1211,7 @@ abstract {
   y = 4,
   ret = x * y,
 } {
-  # Will not work because the previous value of x does not exist yet.
+  # Will not work because non-abstract fields in abstract tuples cannot be overridden.
   x += 1,
 }.eval
 ```
@@ -1207,10 +1219,18 @@ abstract {
 Error message:
 ```
 error:
-    variable reference "x" does not exist in current tuple
+    non-abstract field cannot be overridden in an abstract tuple
+        (consider first evaluating the abstract tuple into a tuple,
+        and then overriding this field)
   |
 7 |   x += 1,
-  |   ^ undefined variable reference
+  |   ^ override of field here
+  |
+2 |   x = 2,
+  |   ^ previous value defined here
+  |
+1 | abstract {
+  | ^^^^^^^^ tuple marked as abstract here
 
 ```
 
@@ -1233,54 +1253,6 @@ JSON result:
 
 ```
 {"ret":8,"x":3,"y":4}
-```
-
-------------
-
-QCL:
-
-```
-{ x = 100,
-  inner = abstract {
-    x = 2,
-    y = 4,
-  } {
-    # Still does not work.
-    x += 1,
-  }.eval
-}
-```
-
-Error message:
-```
-error:
-    variable reference "x" does not exist in current tuple
-  |
-7 |     x += 1,
-  |     ^ undefined variable reference
-
-```
-
-------------
-
-QCL:
-
-```
-{ x = 100,
-  inner = abstract {
-    x = 2,
-    y = 4,
-  } {
-    # Works, but refers to the outer x.
-    x = x + 1,
-  }.eval
-}
-```
-
-JSON result:
-
-```
-{"inner":{"x":101,"y":4},"x":100}
 ```
 
 ------------

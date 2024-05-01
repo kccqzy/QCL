@@ -72,7 +72,7 @@ data Expr
   | Or PositionedExpr PositionedExpr
   | Tuple [PositionedTupleExpr]
   | TupleUpdate PositionedExpr (Positioned [PositionedTupleExpr])
-  | AbstractTuple (Positioned [PositionedTupleExpr])
+  | AbstractTuple (Positioned ()) (Positioned [PositionedTupleExpr])
   | EvalAbstract PositionedExpr (Positioned ())
   | List [PositionedExpr]
   | Var PositionedText VariableLookupScope
@@ -276,7 +276,7 @@ expr = mdo
   let abstractTuple = do
         kw <- lit "abstract"
         tp <- between (lit "{") (lit "}") tupleContents
-        pure (withPosition2 (const AbstractTuple) kw tp)
+        pure (withPosition2 AbstractTuple kw tp)
 
   let tuple = (Tuple <$>) <$> between (lit "{") (lit "}") tupleContents
 
@@ -413,7 +413,8 @@ data AbstractTupleValueAssertion
 data AbstractTupleValue
   = AbstractTupleRows
   { atvFields :: M.Map Text AbstractTupleValueRow,
-    atvAssertions :: [AbstractTupleValueAssertion]
+    atvAssertions :: [AbstractTupleValueAssertion],
+    atvAbstractness :: Positioned ()
   }
   deriving (Show)
 
@@ -449,7 +450,12 @@ data EvalError
   | PrivateRowAccessError PositionedText PositionedText (Positioned ())
   | -- | Making a field abstract when not inside an abstract tuple.
     AbstractInNonAbstractTuple (Positioned ())
-  | AbstractFieldNotOverridden (Positioned ())
+  | -- | An abstract field is never overridden in an abstract tuple.
+    AbstractFieldNotOverridden (Positioned ())
+  | -- | A non-abstract field is overridden in an abstract tuple.
+    NonAbstractFieldOverriddenInAbstractTuple PositionedText PositionedText PositionedRowExpr (Positioned ())
+  | -- | An abstract field is deleted.
+    AbstractRowDeleteError (Positioned ()) (Positioned ())
   deriving (Show)
 
 data TypeErrorDetail = ExpectBoolean | ExpectNumberOrBoolean | ExpectTuple | ExpectAbstractTuple
@@ -525,7 +531,7 @@ evalExpr pexpr =
     Not a -> evalNumericBoolFunc1 (== 0) a
     List pes -> ListValue <$> traverse evalExpr pes
     Tuple tupleExprs -> evalTupleExprs M.empty tupleExprs
-    AbstractTuple p -> AbstractTupleValue <$> intoAbstractTupleValueFromExpr (pValue p)
+    AbstractTuple abstractness p -> AbstractTupleValue <$> intoAbstractTupleValueFromExpr abstractness (pValue p)
     TupleUpdate origVal updates -> do
       orig <- evalExpr origVal
       case orig of
@@ -642,7 +648,7 @@ collectVariables pexpr =
     Not a -> collectVariables a
     List _ -> pure mempty
     Tuple _ -> pure mempty
-    AbstractTuple _ -> pure mempty
+    AbstractTuple _ _ -> pure mempty
     TupleUpdate _ _ -> pure mempty
     Member tuple label -> do
       collected <- collectVariables tuple
@@ -656,7 +662,7 @@ collectVariables pexpr =
       pure (M.singleton (Down ev) val)
 
 evalAbstractTuple :: AbstractTupleValue -> Eval Value
-evalAbstractTuple (AbstractTupleRows fs assertions) = do
+evalAbstractTuple (AbstractTupleRows fs assertions _) = do
   newEnv <- foldlM evalAbstractTupleField (InsideTupleEnv mempty) orderedFieldsAndAssertions
   pure (TupleValue (eCurrentTuple newEnv))
   where
@@ -690,8 +696,8 @@ evalAbstractTuple (AbstractTupleRows fs assertions) = do
     orderedFieldsAndAssertions :: [Either AbstractTupleValueRow AbstractTupleValueAssertion]
     orderedFieldsAndAssertions = sortBy (comparing (either atprEvalOrder atpaEvalOrder)) ((Left <$> M.elems fs) ++ (Right <$> assertions))
 
-intoAbstractTupleValueFromExpr :: [PositionedTupleExpr] -> Eval AbstractTupleValue
-intoAbstractTupleValueFromExpr = intoAbstractTupleValueFromExprUpdate (AbstractTupleRows mempty mempty)
+intoAbstractTupleValueFromExpr :: Positioned () -> [PositionedTupleExpr] -> Eval AbstractTupleValue
+intoAbstractTupleValueFromExpr abstractness = intoAbstractTupleValueFromExprUpdate (AbstractTupleRows mempty mempty abstractness)
 
 intoAbstractTupleValueFromExprUpdate :: AbstractTupleValue -> [PositionedTupleExpr] -> Eval AbstractTupleValue
 intoAbstractTupleValueFromExprUpdate initial texprs =
@@ -732,10 +738,16 @@ intoAbstractTupleValueFromExprUpdate initial texprs =
               Just AbstractTupleValueRow {atprDefinitionLoc = prevLabel}
                 | M.notMember (pValue label) (atvFields initial) ->
                     Left (DuplicateLabelError label prevLabel)
-              Just AbstractTupleValueRow {atprEvalOrder = oldOrder} ->
-                pure (Just newValue {atprEvalOrder = oldOrder})
+              Just AbstractTupleValueRow {atprEvalOrder = oldOrder, atprValue = abstractness@Positioned {pValue = AbstractRow}} ->
+                case pValue rowExpr of
+                  DeleteRow -> Left (AbstractRowDeleteError (void abstractness) (void rowExpr))
+                  _ -> pure (Just newValue {atprEvalOrder = oldOrder})
+              Just AbstractTupleValueRow {atprValue = pRow, atprDefinitionLoc = origDef} ->
+                Left (NonAbstractFieldOverriddenInAbstractTuple label origDef pRow (atvAbstractness initial))
               Nothing ->
-                pure (Just newValue)
+                case pValue rowExpr of
+                  DeleteRow -> pure Nothing -- Nothing to delete.
+                  _ -> pure (Just newValue)
       newFields <- lift (M.alterF alterer (pValue label) fs)
       pure atv {atvFields = newFields}
 
@@ -776,6 +788,20 @@ evalQCL text = do
             "abstract field cannot be used in non-abstract tuples\n" <> explainContext abstract "abstract field"
           AbstractFieldNotOverridden abstract ->
             "abstract field never overridden upon evaluation\n" <> explainContext abstract "abstract field"
+          NonAbstractFieldOverriddenInAbstractTuple label origLabel origRowExpr abstract ->
+            "non-abstract field cannot be overridden in an abstract tuple\n"
+              <> explainPossiblyEvalFirst
+              <> explainContext label "override of field here"
+              <> explainContext origLabel "previous value defined here"
+              <> explainContext abstract "tuple marked as abstract here"
+            where
+              explainPossiblyEvalFirst = case origRowExpr of
+                Positioned {pValue = ValuedRow (Just _) _} -> mempty
+                _ -> "        (consider first evaluating the abstract tuple into a tuple,\n        and then overriding this field)\n"
+          AbstractRowDeleteError abstractness deletion ->
+            "abstract fields cannot be deleted\n"
+              <> explainContext abstractness "abstract field defined here"
+              <> explainContext deletion "delete here"
         escapedText (Positioned {pValue = t}) = TLB.fromString (show t)
         explainExpectedType detail = case detail of
           ExpectBoolean -> "boolean"

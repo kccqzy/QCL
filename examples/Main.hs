@@ -142,8 +142,8 @@ examples =
          } {
            a = 42
          } {
-           a = 64
-         }.eval # Evaluation happens only after both tuple updates.
+           a = 64 # This override fails because abstract rows must be overridden exactly once.
+         }.eval
          |],
     [text|
          # Variables in abstract tuples can refer to the surrounding scope (lexical scope).
@@ -196,12 +196,12 @@ examples =
          # Abstract tuples delay evaluation. They allow but do not require abstract fields.
          abstract {
            x = 0,
-           y = 0,
-           ret = x * y,  # ret is evaluated after the overriding x and y
-         } {
+           y = 1,
+           z = 2,
+         }.eval {
            x = 2,
            y = 4,
-         }.eval
+         }
          |],
     [text|
          abstract {
@@ -209,7 +209,7 @@ examples =
            y = 4,
            ret = x * y,
          } {
-           # Will not work because the previous value of x does not exist yet.
+           # Will not work because non-abstract fields in abstract tuples cannot be overridden.
            x += 1,
          }.eval
          |],
@@ -221,28 +221,6 @@ examples =
          }.eval {
            # Works.
            x += 1,
-         }
-         |],
-    [text|
-         { x = 100,
-           inner = abstract {
-             x = 2,
-             y = 4,
-           } {
-             # Still does not work.
-             x += 1,
-           }.eval
-         }
-         |],
-    [text|
-         { x = 100,
-           inner = abstract {
-             x = 2,
-             y = 4,
-           } {
-             # Works, but refers to the outer x.
-             x = x + 1,
-           }.eval
          }
          |],
     "{a=2, b = abstract { abstract c, assert (c%a == 0) }} { b = b { c = 10 }.eval }",
